@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class UserModel {
+  /// Firestore document id of this user document (`users/{docId}`).
+  final String? docId;
   final String? userId;
   final String? name;
   final String? email;
@@ -20,6 +22,7 @@ class UserModel {
   final bool? uploadErrorLog;
 
   UserModel({
+    this.docId,
     this.userId,
     this.name,
     this.email,
@@ -44,6 +47,7 @@ class UserModel {
     final data = doc.data() as Map<String, dynamic>?;
 
     return UserModel(
+      docId: doc.id,
       userId: data?['userId'] as String?,
       name: data?['name'] as String?,
       email: data?['email'] as String?,
