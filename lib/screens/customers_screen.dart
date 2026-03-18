@@ -605,7 +605,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   const SizedBox(width: 4),
                   Expanded(
                     child: Text(
-                      '${user.phone ?? 'N/A'}  •  ${user.docId ?? 'N/A'}',
+                      '${user.phone ?? 'N/A'}  •  doc id:${user.docId ?? 'N/A'}',
                       maxLines: 1,
                       overflow: TextOverflow.ellipsis,
                       style: TextStyle(color: Colors.grey[700], fontSize: 12),
@@ -641,19 +641,20 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   ),
                 ],
               ),
+               
               if (hasActiveDevice) ...[
                 const SizedBox(height: 4),
                 Row(
                   children: [
                     const Icon(
-                      Icons.phone_iphone,
+                      Icons.airplanemode_active,
                       size: 16,
                       color: Colors.grey,
                     ),
                     const SizedBox(width: 4),
                     Expanded(
                       child: Text(
-                        activeDevice,
+                       'active dev:$activeDevice',
                         maxLines: 1,
                         overflow: TextOverflow.ellipsis,
                         style: TextStyle(color: Colors.grey[700], fontSize: 12),
