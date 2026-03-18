@@ -1,0 +1,67 @@
+// Firestore Rules - Allow Fetching All Users
+// This version allows authenticated users to fetch all users from the collection
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* -----------------------------
+       Helper function to check if user is admin from Firestore
+    ------------------------------*/
+    function isAdminFromFirestore() {
+      return request.auth != null 
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "ADMIN";
+    }
+
+    /* -----------------------------
+       Helper function to check if user is admin from custom claims
+    ------------------------------*/
+    function isAdminFromClaims() {
+      return request.auth != null 
+        && request.auth.token.role == "admin";
+    }
+
+    /* -----------------------------
+       Combined admin check
+    ------------------------------*/
+    function isAdmin() {
+      return isAdminFromClaims() || isAdminFromFirestore();
+    }
+
+    /* -----------------------------
+       USERS Collection: Allow fetching all users
+       This rule MUST come before the catch-all rule
+    ------------------------------*/
+    match /users/{documentId} {
+      // Allow read if:
+      // 1. User is admin, OR
+      // 2. Document ID matches auth.uid, OR
+      // 3. userId field matches auth.uid, OR
+      // 4. email field matches auth.token.email
+      allow read: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || resource.data.userId == request.auth.uid
+            || resource.data.email == request.auth.token.email);
+      
+      // Allow queries - ALL authenticated users can query the collection
+      // This allows fetching all users for listing
+      allow list: if request.auth != null;
+      
+      // Allow write if admin or own document
+      allow write: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || (resource != null && resource.data.userId == request.auth.uid)
+            || (resource != null && resource.data.email == request.auth.token.email));
+    }
+
+    /* -----------------------------
+       All other collections: Admin only
+       This catch-all comes AFTER the users collection rules
+    ------------------------------*/
+    match /{document=**} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+  }
+}

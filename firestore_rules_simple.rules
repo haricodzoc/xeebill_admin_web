@@ -1,0 +1,61 @@
+// Simplified Firestore Security Rules
+// This version works with your current data structure where userId is a field
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* -----------------------------
+       Helper function to check if user is admin from Firestore
+    ------------------------------*/
+    function isAdminFromFirestore() {
+      return request.auth != null 
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "ADMIN";
+    }
+
+    /* -----------------------------
+       Helper function to check if user is admin from custom claims
+    ------------------------------*/
+    function isAdminFromClaims() {
+      return request.auth != null 
+        && request.auth.token.role == "admin";
+    }
+
+    /* -----------------------------
+       Combined admin check
+    ------------------------------*/
+    function isAdmin() {
+      return isAdminFromClaims() || isAdminFromFirestore();
+    }
+
+    /* -----------------------------
+       USERS Collection Rules
+    ------------------------------*/
+    match /users/{documentId} {
+      // Allow users to read their own document (by document ID or userId field)
+      allow read: if request.auth != null 
+        && (request.auth.uid == documentId 
+            || request.auth.uid == resource.data.userId
+            || isAdmin());
+      
+      // Allow users to query the collection to find their own document
+      allow list: if request.auth != null 
+        && (isAdmin() 
+            || (request.query.limit <= 1 
+                && request.query.where('userId', '==', request.auth.uid)));
+      
+      // Allow write if admin or own document
+      allow write: if request.auth != null 
+        && (isAdmin() 
+            || request.auth.uid == documentId 
+            || request.auth.uid == resource.data.userId);
+    }
+
+    /* -----------------------------
+       All other collections: Admin only
+    ------------------------------*/
+    match /{document=**} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+  }
+}

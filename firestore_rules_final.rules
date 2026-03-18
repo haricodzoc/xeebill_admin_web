@@ -1,0 +1,47 @@
+// Final Working Firestore Security Rules
+// Update your Firestore rules with this content
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* -----------------------------
+       Helper function to check if user is admin
+       Checks both custom claims and Firestore document
+    ------------------------------*/
+    function isAdmin() {
+      return request.auth != null 
+        && (request.auth.token.role == "admin" 
+            || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "ADMIN"));
+    }
+
+    /* -----------------------------
+       USERS Collection: Specific rules (must come before catch-all)
+    ------------------------------*/
+    match /users/{documentId} {
+      // Allow read if admin OR if it's the user's own document
+      allow read: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || resource.data.userId == request.auth.uid);
+      
+      // Allow queries - be permissive for queries, app will filter
+      // Admin can query all, authenticated users can query (app filters to own data)
+      allow list: if request.auth != null;
+      
+      // Allow write if admin or own document
+      allow write: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || (resource != null && resource.data.userId == request.auth.uid));
+    }
+
+    /* -----------------------------
+       All other collections: Admin only
+       This catch-all comes AFTER the users collection rules
+    ------------------------------*/
+    match /{document=**} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+  }
+}

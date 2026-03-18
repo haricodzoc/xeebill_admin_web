@@ -1,0 +1,77 @@
+// Complete Firestore Security Rules
+// This version allows querying users by document ID, userId field, or email
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* -----------------------------
+       Helper function to check if user is admin from Firestore document
+    ------------------------------*/
+    function isAdminFromFirestore() {
+      return request.auth != null 
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == "ADMIN";
+    }
+
+    /* -----------------------------
+       Helper function to check if user is admin from custom claims
+    ------------------------------*/
+    function isAdminFromClaims() {
+      return request.auth != null 
+        && request.auth.token.role == "admin";
+    }
+
+    /* -----------------------------
+       Check if user email is hello@codzoc.com
+    ------------------------------*/
+    function isSpecialEmail() {
+      return request.auth != null 
+        && request.auth.token.email == "hello@codzoc.com";
+    }
+
+    /* -----------------------------
+       Combined check: Admin or special email
+    ------------------------------*/
+    function canAccessAllUsers() {
+      return isAdminFromClaims() 
+        || isAdminFromFirestore() 
+        || isSpecialEmail();
+    }
+
+    /* -----------------------------
+       USERS Collection: Specific rules (must come before catch-all)
+    ------------------------------*/
+    match /users/{documentId} {
+      // Allow read if:
+      // 1. User can access all users (admin or hello@codzoc.com), OR
+      // 2. It's the user's own document (by document ID, userId field, or email)
+      allow read: if request.auth != null 
+        && (canAccessAllUsers()
+            || documentId == request.auth.uid
+            || resource.data.userId == request.auth.uid
+            || resource.data.email == request.auth.token.email);
+      
+      // Allow queries/list - users with special access can fetch all users
+      // Regular users can only query with limit 1 (to find their own document)
+      allow list: if request.auth != null 
+        && (canAccessAllUsers() || request.query.limit <= 1);
+      
+      // Allow write if:
+      // 1. User can access all users (admin or hello@codzoc.com), OR
+      // 2. It's the user's own document
+      allow write: if request.auth != null 
+        && (canAccessAllUsers()
+            || documentId == request.auth.uid
+            || (resource != null && resource.data.userId == request.auth.uid)
+            || (resource != null && resource.data.email == request.auth.token.email));
+    }
+
+    /* -----------------------------
+       All other collections: Admin or special email only
+       This catch-all comes AFTER the users collection rules
+    ------------------------------*/
+    match /{document=**} {
+      allow read, write: if request.auth != null && canAccessAllUsers();
+    }
+  }
+}

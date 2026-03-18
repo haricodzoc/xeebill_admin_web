@@ -1,0 +1,53 @@
+// Working Firestore Security Rules
+// This version allows the app to query users collection properly
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    /* -----------------------------
+       Helper function to get user document and check role
+    ------------------------------*/
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return request.auth != null 
+        && (request.auth.token.role == "admin" 
+            || (exists(/databases/$(database)/documents/users/$(request.auth.uid))
+                && getUserDoc().data.role == "ADMIN"));
+    }
+
+    /* -----------------------------
+       USERS Collection: Main rules
+    ------------------------------*/
+    match /users/{documentId} {
+      // Allow read if:
+      // 1. User is admin, OR
+      // 2. Document ID matches auth.uid, OR  
+      // 3. userId field in document matches auth.uid
+      allow read: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || resource.data.userId == request.auth.uid);
+      
+      // Allow queries - admin can query all, others can only query with limit 1
+      // Note: Firestore rules can't check query filters directly, so we allow limited queries
+      allow list: if request.auth != null 
+        && (isAdmin() || request.query.limit <= 1);
+      
+      // Allow write if admin or own document
+      allow write: if request.auth != null 
+        && (isAdmin() 
+            || documentId == request.auth.uid
+            || resource.data.userId == request.auth.uid);
+    }
+
+    /* -----------------------------
+       All other collections: Admin only
+    ------------------------------*/
+    match /{document=**} {
+      allow read, write: if request.auth != null && isAdmin();
+    }
+  }
+}
