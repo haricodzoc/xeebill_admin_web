@@ -171,7 +171,7 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
             try {
               mergedSubcategories.add(SubCategory.fromJson(subcat));
             } catch (e) {
-              debugPrint('Error converting subcategory: $e');
+              debugPrint('Error in converting subcategory: $e');
             }
           }
 
