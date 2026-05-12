@@ -169,7 +169,9 @@ const String OPEN_API_ENDPOINT = "https://api.openai.com/v1/chat/completions";
 
 String OPENAI_API_KEY = "";
 
+/// Unit of measure list. Overwritten at startup from Remote Config `units_json` when fetch succeeds.
 List<Map<String, dynamic>> UNITS = [
+  {"name": "Number", "abbreviation": "nos", "uom_type": "count"},
   {"name": "Piece", "abbreviation": "pcs", "uom_type": "count"},
   {"name": "Meter", "abbreviation": "m", "uom_type": "length"},
   {"name": "Litre", "abbreviation": "L", "uom_type": "volume"},
@@ -185,7 +187,31 @@ List<Map<String, dynamic>> UNITS = [
   {"name": "inch", "abbreviation": "in", "uom_type": "length"},
   {"name": "Feet", "abbreviation": "ft", "uom_type": "length"},
   {"name": "Yard", "abbreviation": "yd", "uom_type": "length"},
+  {"name": "Bottle", "abbreviation": "btl", "uom_type": "count"},
+  {"name": "Jar", "abbreviation": "jar", "uom_type": "count"},
+  {"name": "Tube", "abbreviation": "tube", "uom_type": "count"},
+  {"name": "Carton", "abbreviation": "carton", "uom_type": "count"},
+  {"name": "Bag", "abbreviation": "bag", "uom_type": "count"},
+  {"name": "Can", "abbreviation": "can", "uom_type": "count"},
+  {"name": "Cup", "abbreviation": "cup", "uom_type": "count"},
+  {"name": "Glass", "abbreviation": "glass", "uom_type": "count"},
+  {"name": "Plate", "abbreviation": "plate", "uom_type": "count"},
+  {"name": "Bowl", "abbreviation": "bowl", "uom_type": "count"},
+  {"name": "Spoon", "abbreviation": "spoon", "uom_type": "count"},
+  {"name": "Fork", "abbreviation": "fork", "uom_type": "count"},
+  {"name": "Knife", "abbreviation": "knife", "uom_type": "count"},
+  {"name": "Spatula", "abbreviation": "spatula", "uom_type": "count"},
+  {"name": "Spatula", "abbreviation": "spatula", "uom_type": "count"},
 ];
+
+/// Sorts [UNITS] by `name` (case-insensitive). Call after assigning from Remote Config.
+void sortUnitsAlphabetically() {
+  UNITS.sort((a, b) {
+    final an = (a['name'] as String? ?? '').toLowerCase();
+    final bn = (b['name'] as String? ?? '').toLowerCase();
+    return an.compareTo(bn);
+  });
+}
 
 List<Map<String, dynamic>> TAX_SLABS = [];
 

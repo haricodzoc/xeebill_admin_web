@@ -36,8 +36,24 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
   final TextEditingController _hsnController = TextEditingController();
   final TextEditingController _gstController = TextEditingController();
   final _formKey = GlobalKey<FormState>();
-  String selectedUnit = 'Piece';
+  /// Must match a [UNITS] `name`, or null when unknown / not yet chosen (avoids DropdownButton assert).
+  String? selectedUnit;
   bool _isLoading = false;
+
+  List<String> get _unitDisplayNames {
+    return UNITS
+        .map((unit) => (unit['name'] as String?)?.trim() ?? '')
+        .where((n) => n.isNotEmpty)
+        .toList();
+  }
+
+  /// Default for new subcategories: Piece if listed, else first unit, else null.
+  String? _defaultUnitForNew() {
+    final names = _unitDisplayNames;
+    if (names.contains('Piece')) return 'Piece';
+    if (names.isNotEmpty) return names.first;
+    return null;
+  }
 
   @override
   void initState() {
@@ -48,6 +64,7 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
       _loadDefaultValues(widget.selectedSubcategory!);
     } else {
       _codeController.text = _generateUniqueCode();
+      selectedUnit = _defaultUnitForNew();
     }
   }
 
@@ -56,7 +73,12 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
     _nameController.text = subCategory.name;
     _hsnController.text = subCategory.hsnCode ?? '';
     _gstController.text = subCategory.gstRate?.toString() ?? '';
-    selectedUnit = subCategory.unit ?? 'Piece';
+    final u = subCategory.unit?.trim();
+    if (u != null && u.isNotEmpty && _unitDisplayNames.contains(u)) {
+      selectedUnit = u;
+    } else {
+      selectedUnit = null;
+    }
 
     attributes = {};
     try {
@@ -86,39 +108,61 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
   }
 
   String _generateUniqueCode() {
-    // Extract numeric suffixes from existing subcategory codes
-    // that match the category code prefix
-    List<int> numericSuffixes = [];
-    
-    for (var subcat in widget.subcategories) {
-      // Check if the subcategory code starts with the category code
-      if (subcat.code.startsWith('${widget.categoryCode}-')) {
-        // Extract the part after the category code and hyphen
-        final suffix = subcat.code.substring('${widget.categoryCode}-'.length);
-        // Try to parse as integer
-        final numericValue = int.tryParse(suffix);
-        if (numericValue != null) {
-          numericSuffixes.add(numericValue);
-        }
+    final prefix = '${widget.categoryCode}-';
+    final usedCodes = {
+      for (final s in widget.subcategories) s.code.trim(),
+    };
+
+    var maxSuffix = 0;
+    for (final subcat in widget.subcategories) {
+      final c = subcat.code.trim();
+      if (c.startsWith(prefix)) {
+        final suffix = c.substring(prefix.length);
+        final n = int.tryParse(suffix);
+        if (n != null && n > maxSuffix) maxSuffix = n;
       }
     }
-    
-    // Find the maximum numeric suffix, or start from 1 if none exist
-    int nextNumber = 1;
-    if (numericSuffixes.isNotEmpty) {
-      nextNumber = numericSuffixes.reduce((a, b) => a > b ? a : b) + 1;
+
+    var next = maxSuffix + 1;
+    while (true) {
+      final candidate =
+          '$prefix${next.toString().padLeft(2, '0')}';
+      if (!usedCodes.contains(candidate)) return candidate;
+      next++;
     }
-    
-    // Format as 2-digit zero-padded string
-    return '${widget.categoryCode}-${nextNumber.toString().padLeft(2, '0')}';
+  }
+
+  /// Subcategory identity is [code]. Duplicates cause Firestore merge to overwrite another row.
+  void _assertUniqueSubcategoryCodes(List<SubCategory> list) {
+    final seen = <String>{};
+    for (final s in list) {
+      final c = s.code.trim();
+      if (c.isEmpty) {
+        throw Exception(
+          'Subcategory "${s.name}" has an empty code. Each subcategory must have a unique non-empty code.',
+        );
+      }
+      if (seen.contains(c)) {
+        throw Exception(
+          'Duplicate subcategory code "$c". Another entry already uses this code — '
+          'saving would replace the wrong subcategory (e.g. "Ghee cake" becoming "Cake"). '
+          'Use a different code.',
+        );
+      }
+      seen.add(c);
+    }
   }
 
   String _capitalizeWords(String text) {
     if (text.isEmpty) return text;
     return text
-        .split(' ')
+        .trim()
+        .split(RegExp(r'\s+'))
         .map((word) {
           if (word.isEmpty) return word;
+          final hasLetters = RegExp(r'[A-Za-z]').hasMatch(word);
+          final isAllCaps = hasLetters && word.toUpperCase() == word;
+          if (isAllCaps) return word; // preserve acronyms like "LED"
           return word[0].toUpperCase() + word.substring(1).toLowerCase();
         })
         .join(' ');
@@ -176,8 +220,9 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
           }
 
           for (var updated in updatedSubcategories) {
+            final key = updated.code.trim();
             int idx = mergedSubcategories.indexWhere(
-              (s) => s.code == updated.code,
+              (s) => s.code.trim() == key,
             );
             if (idx != -1) {
               mergedSubcategories[idx] = updated;
@@ -186,12 +231,7 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
             }
           }
 
-          final seenCodes = <String>{};
-          mergedSubcategories = mergedSubcategories.where((s) {
-            if (seenCodes.contains(s.code)) return false;
-            seenCodes.add(s.code);
-            return true;
-          }).toList();
+          _assertUniqueSubcategoryCodes(mergedSubcategories);
 
           List<Map<String, dynamic>> subcategoriesJson = mergedSubcategories
               .map((subcategory) {
@@ -316,7 +356,8 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                   ),
                   const SizedBox(height: 8),
                   Text(
-                    'Note: This will replace all existing attributes.',
+                    'Note: This will replace all existing attributes. '
+                    'All imported options start unchecked (false), even if the JSON had true.',
                     style: TextStyle(fontSize: 11, color: Colors.orange[700]),
                   ),
                 ],
@@ -357,18 +398,10 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                   // Convert to attributes map structure
                   final Map<String, Map<String, bool>> importedAttributes = {};
                   jsonData.forEach((key, value) {
-                    if (value is Map<String, dynamic>) {
+                    if (value is Map) {
                       importedAttributes[key] = <String, bool>{};
-                      value.forEach((subKey, subValue) {
-                        bool boolValue = false;
-                        if (subValue is bool) {
-                          boolValue = subValue;
-                        } else if (subValue is String) {
-                          boolValue = subValue.toLowerCase() == 'true';
-                        } else if (subValue is int) {
-                          boolValue = subValue != 0;
-                        }
-                        importedAttributes[key]![subKey] = boolValue;
+                      value.forEach((subKey, _) {
+                        importedAttributes[key]![subKey.toString()] = false;
                       });
                     }
                   });
@@ -527,43 +560,41 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
   }
 
   void _showRemoveAttributeDialog(String attributeKey) {
-    if (widget.isUpdate == true) {
-      if (widget.selectedSubcategory != null &&
-          widget.selectedSubcategory!.attributes.isNotEmpty) {
-        try {
-          String cleanJson = widget.selectedSubcategory!.attributes.replaceAll(
-            '\\"',
-            '"',
-          );
-          Map<String, dynamic> originalAttributes = json.decode(cleanJson);
-          if (originalAttributes.containsKey(attributeKey)) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Sorry, attribute removal is not permitted after it has been saved once.',
-                ),
-              ),
-            );
-            return;
-          }
-        } catch (e) {
-          debugPrint('Error parsing original attributes: $e');
-        }
+    var attributeWasSaved = false;
+    if (widget.isUpdate &&
+        widget.selectedSubcategory != null &&
+        widget.selectedSubcategory!.attributes.isNotEmpty) {
+      try {
+        final cleanJson = widget.selectedSubcategory!.attributes.replaceAll(
+          '\\"',
+          '"',
+        );
+        final originalAttributes =
+            json.decode(cleanJson) as Map<String, dynamic>;
+        attributeWasSaved = originalAttributes.containsKey(attributeKey);
+      } catch (e) {
+        debugPrint('Error parsing original attributes: $e');
       }
     }
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: Text(
-            'Remove Attribute',
+            'Remove attribute?',
             style: TextStyle(
               color: AppColors.primaryRed,
               fontWeight: FontWeight.bold,
             ),
           ),
           content: Text(
-            'Are you sure you want to remove "$attributeKey" and all its items?',
+            attributeWasSaved
+                ? 'The attribute "$attributeKey" was already saved. Removing it '
+                    'and all its values may affect existing items or bills that use '
+                    'these options.\n\nAre you sure you want to remove it?'
+                : 'Remove "$attributeKey" and all its values? This cannot be undone '
+                    'after you save the subcategory.',
           ),
           actions: [
             TextButton(
@@ -590,47 +621,45 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
   }
 
   void _showRemoveItemDialog(String attributeKey, String itemKey) {
-    if (widget.isUpdate == true) {
-      if (widget.selectedSubcategory != null &&
-          widget.selectedSubcategory!.attributes.isNotEmpty) {
-        try {
-          String cleanJson = widget.selectedSubcategory!.attributes.replaceAll(
-            '\\"',
-            '"',
-          );
-          Map<String, dynamic> originalAttributes = json.decode(cleanJson);
-          if (originalAttributes.containsKey(attributeKey)) {
-            Map<String, dynamic> originalItems =
-                originalAttributes[attributeKey];
-            if (originalItems.containsKey(itemKey)) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(
-                  content: Text(
-                    'Sorry, item removal is not permitted after it has been saved once.',
-                  ),
-                ),
-              );
-              return;
-            }
+    var itemWasSaved = false;
+    if (widget.isUpdate &&
+        widget.selectedSubcategory != null &&
+        widget.selectedSubcategory!.attributes.isNotEmpty) {
+      try {
+        final cleanJson = widget.selectedSubcategory!.attributes.replaceAll(
+          '\\"',
+          '"',
+        );
+        final originalAttributes =
+            json.decode(cleanJson) as Map<String, dynamic>;
+        if (originalAttributes.containsKey(attributeKey)) {
+          final raw = originalAttributes[attributeKey];
+          if (raw is Map) {
+            itemWasSaved = raw.containsKey(itemKey);
           }
-        } catch (e) {
-          debugPrint('Error parsing original attributes: $e');
         }
+      } catch (e) {
+        debugPrint('Error parsing original attributes: $e');
       }
     }
+
     showDialog(
       context: context,
       builder: (BuildContext context) {
         return AlertDialog(
           title: Text(
-            'Remove Item',
+            'Remove value?',
             style: TextStyle(
               color: AppColors.primaryRed,
               fontWeight: FontWeight.bold,
             ),
           ),
           content: Text(
-            'Are you sure you want to remove "$itemKey" from $attributeKey?',
+            itemWasSaved
+                ? '"$itemKey" under "$attributeKey" was already saved. Removing it '
+                    'may affect existing items or bills that use this option.\n\n'
+                    'Remove it anyway?'
+                : 'Remove "$itemKey" from "$attributeKey"?',
           ),
           actions: [
             TextButton(
@@ -779,7 +808,7 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                         gridDelegate:
                             const SliverGridDelegateWithFixedCrossAxisCount(
                               crossAxisCount: 2,
-                              mainAxisExtent: 40,
+                              mainAxisExtent: 48,
                               crossAxisSpacing: 8,
                               mainAxisSpacing: 4,
                             ),
@@ -787,7 +816,7 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                         itemBuilder: (context, index) {
                           if (index == attributeEntry.value.entries.length) {
                             return SizedBox(
-                              height: 40,
+                              height: 48,
                               child: Container(
                                 decoration: BoxDecoration(
                                   color: Colors.transparent,
@@ -829,43 +858,63 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
 
                           final subEntry = attributeEntry.value.entries
                               .elementAt(index);
+                          final attrKey = attributeEntry.key;
+                          final valueKey = subEntry.key;
+                          final isOn = subEntry.value;
                           return SizedBox(
-                            height: 40,
+                            height: 48,
                             child: GestureDetector(
                               onLongPress: () => _showRemoveItemDialog(
-                                attributeEntry.key,
-                                subEntry.key,
+                                attrKey,
+                                valueKey,
                               ),
                               child: Container(
                                 decoration: BoxDecoration(
-                                  color: AppColors.primaryGrey.withOpacity(0.1),
+                                  color: isOn
+                                      ? AppColors.primaryGreen.withOpacity(0.08)
+                                      : AppColors.primaryGrey.withOpacity(0.1),
                                   borderRadius: BorderRadius.circular(6),
                                   border: Border.all(
-                                    color: AppColors.primaryGrey.withOpacity(
-                                      0.3,
-                                    ),
+                                    color: isOn
+                                        ? AppColors.primaryGreen.withOpacity(
+                                            0.45,
+                                          )
+                                        : AppColors.primaryGrey.withOpacity(
+                                            0.3,
+                                          ),
                                     width: 1,
                                   ),
                                 ),
                                 child: Padding(
-                                  padding: const EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
+                                  padding: const EdgeInsets.only(
+                                    left: 4,
+                                    right: 6,
                                   ),
                                   child: Row(
                                     children: [
-                                      Icon(
-                                        Icons.label_outline,
-                                        size: 12,
-                                        color: AppColors.primaryGrey,
+                                      Checkbox(
+                                        value: isOn,
+                                        materialTapTargetSize:
+                                            MaterialTapTargetSize.shrinkWrap,
+                                        visualDensity: VisualDensity.compact,
+                                        onChanged: (v) {
+                                          if (v == null) return;
+                                          setState(() {
+                                            attributes[attrKey]![valueKey] = v;
+                                          });
+                                        },
                                       ),
-                                      const SizedBox(width: 4),
                                       Expanded(
                                         child: Text(
-                                          subEntry.key,
+                                          valueKey,
                                           style: TextStyle(
                                             fontSize: 12,
-                                            color: AppColors.primaryGrey,
+                                            color: isOn
+                                                ? AppColors.primaryGreen
+                                                : AppColors.primaryGrey,
+                                            fontWeight: isOn
+                                                ? FontWeight.w600
+                                                : FontWeight.normal,
                                           ),
                                           maxLines: 1,
                                           overflow: TextOverflow.ellipsis,
@@ -1076,20 +1125,25 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                     padding: const EdgeInsets.only(top: 15.0, bottom: 8),
                     child: DropdownButtonFormField<String>(
                       value: selectedUnit,
-                      items: UNITS
-                          .map(
-                            (unit) => DropdownMenuItem<String>(
-                              value: unit['name'] as String,
-                              child: Text(unit['name'] as String),
-                            ),
-                          )
-                          .toList(),
+                      items: [
+                        const DropdownMenuItem<String>(
+                          value: null,
+                          child: Text('Select unit'),
+                        ),
+                        ...UNITS.map(
+                          (unit) {
+                            final name = unit['name'] as String;
+                            return DropdownMenuItem<String>(
+                              value: name,
+                              child: Text(name),
+                            );
+                          },
+                        ),
+                      ],
                       onChanged: (value) {
-                        if (value != null) {
-                          setState(() {
-                            selectedUnit = value;
-                          });
-                        }
+                        setState(() {
+                          selectedUnit = value;
+                        });
                       },
                       dropdownColor: AppColors.backgroundText,
                       decoration: InputDecoration(
@@ -1105,7 +1159,9 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                         ),
                       ),
                       validator: (value) =>
-                          value == null ? 'Please select a unit' : null,
+                          value == null || value.isEmpty
+                              ? 'Please select a unit'
+                              : null,
                     ),
                   ),
                 ),
@@ -1201,7 +1257,8 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                                 String selSubCode =
                                     widget.selectedSubcategory!.code;
                                 int index = updatedSubcategories.indexWhere(
-                                  (sub) => sub.code == selSubCode,
+                                  (sub) =>
+                                      sub.code.trim() == selSubCode.trim(),
                                 );
                                 if (index != -1) {
                                   updatedSubcategories[index] = newCategory;
@@ -1209,8 +1266,36 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                                   updatedSubcategories.add(newCategory);
                                 }
                               } else {
+                                final taken = widget.subcategories
+                                    .where(
+                                      (s) =>
+                                          s.code.trim() ==
+                                          newCatCode.trim(),
+                                    )
+                                    .toList();
+                                if (taken.isNotEmpty) {
+                                  if (mounted) {
+                                    ScaffoldMessenger.of(context)
+                                        .showSnackBar(
+                                      SnackBar(
+                                        content: Text(
+                                          'Code "$newCatCode" is already used by '
+                                          '"${taken.first.name}". Use a unique code — '
+                                          'duplicate codes overwrite the existing subcategory.',
+                                        ),
+                                        backgroundColor:
+                                            AppColors.primaryRed,
+                                      ),
+                                    );
+                                  }
+                                  return;
+                                }
                                 updatedSubcategories.add(newCategory);
                               }
+
+                              _assertUniqueSubcategoryCodes(
+                                updatedSubcategories,
+                              );
 
                               await _updateFirestoreSubcategories(
                                 updatedSubcategories,

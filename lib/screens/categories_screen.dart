@@ -4,6 +4,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/category_model.dart';
 import '../models/item_model.dart';
+import '../utils/constants.dart';
 import 'import_categories_screen.dart';
 import 'deleted_category_items_screen.dart';
 
@@ -26,6 +27,14 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   final Set<String> _expandedGroupCodes = <String>{};
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+
+  String _normalizeForSearch(String input) {
+    final lower = input.trim().toLowerCase();
+    // Remove all whitespace (including NBSP) and punctuation so "ledmodule"
+    // matches "LED Module" / "LED-Module" / "LED Module".
+    final noSpace = lower.replaceAll(RegExp(r'[\\s\\u00A0]+'), '');
+    return noSpace.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
 
   /// In‑memory editable attributes per category code
   /// Structure: { categoryCode: { attributeName: attributeValueMapOrConfig } }
@@ -278,12 +287,12 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   List<Map<String, dynamic>> get _filteredGroupedCategories {
-    final query = _searchQuery.trim().toLowerCase();
+    final query = _normalizeForSearch(_searchQuery);
     if (query.isEmpty) return _groupedCategories;
 
     return _groupedCategories.where((group) {
-      final groupName = (group['category_name'] as String? ?? '').toLowerCase();
-      final groupCode = (group['category_code'] as String? ?? '').toLowerCase();
+      final groupName = _normalizeForSearch(group['category_name'] as String? ?? '');
+      final groupCode = _normalizeForSearch(group['category_code'] as String? ?? '');
       final subcategories =
           group['subcategories'] as List<CategoryModel>? ?? [];
 
@@ -294,9 +303,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
       // Check if any subcategory matches
       final matchingSubcategories = subcategories.where((subcat) {
-        final subcatName = subcat.name.toLowerCase();
-        final subcatCode = subcat.code.toLowerCase();
-        final subcatHsn = subcat.hsnCode.toLowerCase();
+        final subcatName = _normalizeForSearch(subcat.name);
+        final subcatCode = _normalizeForSearch(subcat.code);
+        final subcatHsn = _normalizeForSearch(subcat.hsnCode);
         return subcatName.contains(query) ||
             subcatCode.contains(query) ||
             subcatHsn.contains(query);
@@ -574,105 +583,134 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
 
   Future<void> _showEditCategoryDialog(CategoryModel category) async {
     final nameController = TextEditingController(text: category.name);
-    final unitController = TextEditingController(text: category.unit);
     final taxController = TextEditingController(
       text: category.taxPercentage.toStringAsFixed(2),
     );
     final formKey = GlobalKey<FormState>();
+    final unitNames = UNITS
+        .map((u) => (u['name'] as String?)?.trim() ?? '')
+        .where((n) => n.isNotEmpty)
+        .toSet()
+        .toList()
+      ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+
+    String selectedUnit = category.unit.trim();
+    if (selectedUnit.isEmpty) {
+      selectedUnit = unitNames.isNotEmpty ? unitNames.first : 'Piece';
+    }
+    if (!unitNames.contains(selectedUnit)) {
+      unitNames.add(selectedUnit);
+      unitNames.sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
+    }
 
     await showDialog(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text('Edit Category'),
-        content: Form(
-          key: formKey,
-          child: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextFormField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Category Name *',
-                    border: OutlineInputBorder(),
+      builder: (context) => StatefulBuilder(
+        builder: (context, setDialogState) => AlertDialog(
+          title: const Text('Edit Category'),
+          content: Form(
+            key: formKey,
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  TextFormField(
+                    controller: nameController,
+                    decoration: const InputDecoration(
+                      labelText: 'Category Name *',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) => value?.isEmpty ?? true
+                        ? 'Category name is required'
+                        : null,
                   ),
-                  validator: (value) => value?.isEmpty ?? true
-                      ? 'Category name is required'
-                      : null,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: unitController,
-                  decoration: const InputDecoration(
-                    labelText: 'Unit *',
-                    border: OutlineInputBorder(),
-                    hintText: 'e.g., Piece, Kg, Liter',
+                  const SizedBox(height: 16),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedUnit,
+                    items: unitNames
+                        .map(
+                          (unit) => DropdownMenuItem<String>(
+                            value: unit,
+                            child: Text(unit),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setDialogState(() {
+                        selectedUnit = value;
+                      });
+                    },
+                    decoration: const InputDecoration(
+                      labelText: 'Unit *',
+                      border: OutlineInputBorder(),
+                    ),
+                    validator: (value) =>
+                        value?.isEmpty ?? true ? 'Unit is required' : null,
                   ),
-                  validator: (value) =>
-                      value?.isEmpty ?? true ? 'Unit is required' : null,
-                ),
-                const SizedBox(height: 16),
-                TextFormField(
-                  controller: taxController,
-                  decoration: const InputDecoration(
-                    labelText: 'Tax Percentage *',
-                    border: OutlineInputBorder(),
-                    hintText: 'e.g., 18.00',
+                  const SizedBox(height: 16),
+                  TextFormField(
+                    controller: taxController,
+                    decoration: const InputDecoration(
+                      labelText: 'Tax Percentage *',
+                      border: OutlineInputBorder(),
+                      hintText: 'e.g., 18.00',
+                    ),
+                    keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true,
+                    ),
+                    validator: (value) {
+                      if (value?.isEmpty ?? true) {
+                        return 'Tax percentage is required';
+                      }
+                      final tax = double.tryParse(value!);
+                      if (tax == null || tax < 0) {
+                        return 'Please enter a valid tax percentage';
+                      }
+                      return null;
+                    },
                   ),
-                  keyboardType: const TextInputType.numberWithOptions(
-                    decimal: true,
+                  const SizedBox(height: 8),
+                  Text(
+                    'Note: Changing tax will update all items using this category.',
+                    style: TextStyle(fontSize: 12, color: Colors.orange[700]),
                   ),
-                  validator: (value) {
-                    if (value?.isEmpty ?? true) {
-                      return 'Tax percentage is required';
-                    }
-                    final tax = double.tryParse(value!);
-                    if (tax == null || tax < 0) {
-                      return 'Please enter a valid tax percentage';
-                    }
-                    return null;
-                  },
-                ),
-                const SizedBox(height: 8),
-                Text(
-                  'Note: Changing tax will update all items using this category.',
-                  style: TextStyle(fontSize: 12, color: Colors.orange[700]),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                final newName = nameController.text.trim();
-                final newUnit = unitController.text.trim();
-                final newTax =
-                    double.tryParse(taxController.text.trim()) ?? 0.0;
-                final oldTax = category.taxPercentage;
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () async {
+                if (formKey.currentState!.validate()) {
+                  final newName = nameController.text.trim();
+                  final newUnit = selectedUnit.trim();
+                  final newTax =
+                      double.tryParse(taxController.text.trim()) ?? 0.0;
+                  final oldTax = category.taxPercentage;
 
-                await _updateCategory(
-                  category,
-                  newName,
-                  newUnit,
-                  newTax,
-                  oldTax != newTax,
-                );
-                Navigator.pop(context);
-              }
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.blue,
-              foregroundColor: Colors.white,
+                  await _updateCategory(
+                    category,
+                    newName,
+                    newUnit,
+                    newTax,
+                    oldTax != newTax,
+                  );
+                  Navigator.pop(context);
+                }
+              },
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.blue,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save'),
             ),
-            child: const Text('Save'),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
@@ -798,6 +836,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
             scannedBarcode: currentItem.scannedBarcode,
             listedOnline: currentItem.listedOnline,
             additionalInfo: currentItem.additionalInfo,
+            locationId: currentItem.locationId,
+            subProfileId: currentItem.subProfileId,
             createdAt: currentItem.createdAt,
             updatedAt: DateTime.now(), // Set current time when updating
           );

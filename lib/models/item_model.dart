@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 class ItemModel {
@@ -21,6 +23,10 @@ class ItemModel {
   String additionalInfo;
   final String? description;
   final String? hsnCode;
+  /// From `location_id` / `locationId` when present.
+  final String? locationId;
+  /// Sub-profile document id (`sub_profile_id` / `profile_id` / `subProfileId`).
+  final String? subProfileId;
   final DateTime createdAt;
   DateTime updatedAt;
 
@@ -45,6 +51,8 @@ class ItemModel {
     this.description,
     this.listedOnline = false,
     this.additionalInfo = '',
+    this.locationId,
+    this.subProfileId,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) : createdAt = createdAt ?? DateTime.now(),
@@ -71,6 +79,10 @@ class ItemModel {
       'scanned_barcode': scannedBarcode,
       'listed_online': listedOnline ? 1 : 0,
       'additional_info': additionalInfo,
+      if (locationId != null && locationId!.trim().isNotEmpty)
+        'location_id': locationId,
+      if (subProfileId != null && subProfileId!.trim().isNotEmpty)
+        'sub_profile_id': subProfileId,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -158,7 +170,16 @@ class ItemModel {
       printed: data['printed'] == true || data['printed'] == 1,
       mapped: data['mapped'] == true || data['mapped'] == 1,
       active: data['active'] != false && data['active'] != 0,
-      attributes: data['attributes'] as String? ?? '',
+      attributes: () {
+        final a = data['attributes'];
+        if (a == null) return '';
+        if (a is String) return a;
+        try {
+          return jsonEncode(a);
+        } catch (_) {
+          return '';
+        }
+      }(),
       categoryCode: data['category_code'] as String? ?? '',
       unit: data['unit'] as String? ?? 'pcs',
       scannedBarcode: data['scanned_barcode'] as String? ?? '',
@@ -167,6 +188,18 @@ class ItemModel {
       taxPerc: (data['tax_perc'] as num?)?.toDouble(),
       hsnCode: data['hsn_code'] as String?,
       description: data['description'] as String?,
+      locationId: () {
+        final loc = data['location_id'] ?? data['locationId'];
+        if (loc == null) return null;
+        final s = loc.toString().trim();
+        return s.isEmpty ? null : s;
+      }(),
+      subProfileId: () {
+        final v = data['sub_profile_id'] ?? data['profile_id'] ?? data['subProfileId'];
+        if (v == null) return null;
+        final s = v.toString().trim();
+        return s.isEmpty ? null : s;
+      }(),
       createdAt: _parseTimestamp(data['created_at']) ?? DateTime.now(),
       updatedAt: _parseTimestamp(data['updated_at']) ?? DateTime.now(),
     );

@@ -40,8 +40,8 @@ class GeneralCategory {
 
     return GeneralCategory(
       id: doc.id,
-      code: data['code'] ?? '',
-      categoryName: data['category_name'] ?? 'Unknown Category',
+      code: data['code']?.toString() ?? '',
+      categoryName: data['category_name']?.toString() ?? 'Unknown Category',
       subcategories: subcategories,
     );
   }

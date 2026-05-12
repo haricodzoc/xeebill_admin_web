@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_core/firebase_core.dart';
 import 'package:xeebill_web/screens/settings_screen.dart';
 import '../models/user_model.dart';
 import 'bills_screen.dart';
@@ -9,6 +10,7 @@ import 'items_screen.dart';
 import 'sub_profiles_screen.dart';
 import 'reports_screen.dart';
 import 'credit_payments_screen.dart';
+import 'user_locations_screen.dart';
 
 class CustomersScreen extends StatefulWidget {
   const CustomersScreen({super.key});
@@ -27,6 +29,33 @@ class _CustomersScreenState extends State<CustomersScreen> {
   bool _isCheckingAdmin = true;
   final TextEditingController _searchController = TextEditingController();
   String _searchQuery = '';
+  Map<String, String> _rechargePlanTitlesById = {};
+  final Map<String, Future<UserLocationsBootstrap>> _locationsBootstrapFutures =
+      {};
+
+  static const String _kDefaultLabelSize = '38mm * 25mm';
+  static const num _kDefaultRechargeAmount = 500;
+
+  String _userCacheKey(UserModel user) {
+    final doc = user.docId?.trim();
+    if (doc != null && doc.isNotEmpty) return doc;
+    final uid = user.userId?.trim();
+    if (uid != null && uid.isNotEmpty) return uid;
+    return user.email?.trim() ?? 'unknown';
+  }
+
+  String? _normalizePlanId(dynamic value, {bool allowEmpty = false}) {
+    if (value == null) return null;
+    var s = value.toString().trim();
+    if (s.isEmpty) return allowEmpty ? '' : null;
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'"))) {
+      s = s.substring(1, s.length - 1).trim();
+    }
+    if (s.isEmpty) return allowEmpty ? '' : null;
+    if (s.toLowerCase() == 'null') return null;
+    return s;
+  }
 
   @override
   void initState() {
@@ -268,9 +297,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
     try {
       debugPrint('Fetching all users from Firestore...');
-      final QuerySnapshot snapshot = await _firestore.collection('users').get();
+      final usersFuture = _firestore.collection('users').get();
+      final plansFuture = _firestore.collection('recharge_plans').get();
+      final results = await Future.wait([usersFuture, plansFuture]);
+      final QuerySnapshot snapshot = results[0] as QuerySnapshot;
+      final QuerySnapshot plansSnapshot = results[1] as QuerySnapshot;
 
       debugPrint('Found ${snapshot.docs.length} users');
+      debugPrint('Found ${plansSnapshot.docs.length} recharge plans');
 
       final List<UserModel> users = snapshot.docs
           .map((doc) {
@@ -284,6 +318,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
           .whereType<UserModel>()
           .toList();
 
+      final Map<String, String> plansById = {};
+      for (final doc in plansSnapshot.docs) {
+        final data = doc.data() as Map<String, dynamic>?;
+        final planId = _normalizePlanId(data?['plan_id'], allowEmpty: true);
+        final title = (data?['title'] ?? '').toString().trim();
+        if (planId == null) continue;
+        plansById[planId] = title.isEmpty ? planId : title;
+      }
+
       // Sort users by name for better UX
       users.sort((a, b) {
         final nameA = a.name ?? '';
@@ -293,6 +336,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
 
       setState(() {
         _users = users;
+        _rechargePlanTitlesById = plansById;
         _isLoading = false;
       });
 
@@ -347,6 +391,12 @@ class _CustomersScreenState extends State<CustomersScreen> {
           ],
         ),
         actions: [
+          if (_isAdmin)
+            IconButton(
+              icon: const Icon(Icons.person_add),
+              tooltip: 'Create customer',
+              onPressed: _showCreateCustomerDialog,
+            ),
           if (_isAdmin)
             IconButton(
               icon: const Icon(Icons.refresh),
@@ -549,6 +599,12 @@ class _CustomersScreenState extends State<CustomersScreen> {
     final activeDevice = (user.activeDevice ?? '').trim();
     final hasActiveDevice = activeDevice.isNotEmpty;
     final expiryText = user.formatDate(user.accountExpiry);
+    final isPremiumCustomer = user.isPremiumCustomer == true;
+    final planId = _normalizePlanId(user.planId, allowEmpty: true);
+    final activePlanName = planId == null
+        ? 'Free'
+        : (_rechargePlanTitlesById[planId] ??
+              (planId.isEmpty ? 'Free' : 'Unknown Plan ($planId)'));
 
     return Card(
       margin: const EdgeInsets.only(bottom: 16),
@@ -557,6 +613,17 @@ class _CustomersScreenState extends State<CustomersScreen> {
       child: Theme(
         data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
         child: ExpansionTile(
+          onExpansionChanged: (expanded) {
+            if (!expanded) return;
+            final key = _userCacheKey(user);
+            _locationsBootstrapFutures.putIfAbsent(key, () async {
+              final ref = await _resolveUserDocRef(user);
+              if (ref == null) {
+                throw Exception('User document not found');
+              }
+              return loadUserLocationsBootstrap(ref);
+            });
+          },
           tilePadding: const EdgeInsets.symmetric(
             horizontal: 16.0,
             vertical: 8.0,
@@ -673,6 +740,23 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   padding: EdgeInsets.zero,
                 ),
               ],
+              if (isPremiumCustomer) ...[
+                const SizedBox(height: 4),
+                Chip(
+                  avatar: Icon(
+                    Icons.workspace_premium,
+                    size: 16,
+                    color: Colors.amber[900],
+                  ),
+                  label: const Text(
+                    'Premium customer',
+                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
+                  ),
+                  backgroundColor: Colors.amber[50],
+                  side: BorderSide(color: Colors.amber.shade200),
+                  padding: EdgeInsets.zero,
+                ),
+              ],
             ],
           ),
           trailing: isExpired
@@ -691,6 +775,8 @@ class _CustomersScreenState extends State<CustomersScreen> {
                   _buildInfoRow('Phone', user.phone ?? 'N/A'),
                   _buildInfoRow('Address', user.address ?? 'N/A'),
                   _buildInfoRow('GST Number', user.gstNumber ?? 'N/A'),
+                  _buildInfoRow('Active Plan', activePlanName),
+                  _buildPremiumCustomerRow(user),
                   _buildActiveDeviceRow(user),
                   _buildAccountExpiryRow(user),
                   _buildInfoRow('Created At', user.formatDate(user.createdAt)),
@@ -758,6 +844,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       ),
                       _buildActionButton(
                         context,
+                        'Locations',
+                        Icons.location_on_outlined,
+                        Colors.brown,
+                        () => _openUserLocations(context, user),
+                      ),
+                      _buildActionButton(
+                        context,
                         'Reports',
                         Icons.analytics,
                         Colors.teal,
@@ -776,6 +869,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         Icons.settings,
                         Colors.grey,
                         () => _navigateToSettings(context, user),
+                      ),
+                      _buildActionButton(
+                        context,
+                        'Additional Settings',
+                        Icons.tune,
+                        Colors.deepPurple,
+                        () => _showAdditionalSettingsDialog(user),
                       ),
                     ],
                   ),
@@ -849,6 +949,53 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
   }
 
+  Future<void> _openUserLocations(BuildContext context, UserModel user) async {
+    final key = _userCacheKey(user);
+    try {
+      final ref = await _resolveUserDocRef(user);
+      if (ref == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to find user document'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      Future<UserLocationsBootstrap> fut;
+      if (_locationsBootstrapFutures.containsKey(key)) {
+        fut = _locationsBootstrapFutures[key]!;
+      } else {
+        fut = loadUserLocationsBootstrap(ref);
+        _locationsBootstrapFutures[key] = fut;
+      }
+      final bootstrap = await fut;
+
+      if (!context.mounted) return;
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute(
+          builder: (context) => UserLocationsScreen(
+            userRef: ref,
+            displayName: user.name ?? user.email ?? 'User',
+            initialBootstrap: bootstrap,
+          ),
+        ),
+      );
+      _locationsBootstrapFutures.remove(key);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not load locations: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
   void _navigateToReports(BuildContext context, UserModel user) {
     Navigator.push(
       context,
@@ -875,6 +1022,194 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
   }
 
+  int _parseAdditionalSettingValue(dynamic value) {
+    if (value == null) return 0;
+    if (value is int) return value;
+    if (value is num) return value.toInt();
+    if (value is String) return int.tryParse(value.trim()) ?? 0;
+    return 0;
+  }
+
+  Future<void> _showAdditionalSettingsDialog(UserModel user) async {
+    final ref = await _resolveUserDocRef(user);
+    if (ref == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to find user document to update settings'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final snap = await ref.get();
+    final data = snap.data() ?? <String, dynamic>{};
+
+    final devicesController = TextEditingController(
+      text: _parseAdditionalSettingValue(
+        data['additional_devices_allowed'],
+      ).toString(),
+    );
+    final itemsController = TextEditingController(
+      text: _parseAdditionalSettingValue(
+        data['additional_items_allowed'],
+      ).toString(),
+    );
+    final customersController = TextEditingController(
+      text: _parseAdditionalSettingValue(
+        data['additional_customers_allowed'],
+      ).toString(),
+    );
+    final billsController = TextEditingController(
+      text: _parseAdditionalSettingValue(
+        data['additional_bills_allowed'],
+      ).toString(),
+    );
+
+    bool isSaving = false;
+
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> save() async {
+              final devices = int.tryParse(devicesController.text.trim());
+              final items = int.tryParse(itemsController.text.trim());
+              final customers = int.tryParse(customersController.text.trim());
+              final bills = int.tryParse(billsController.text.trim());
+
+              if ([devices, items, customers, bills].any((v) => v == null)) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(
+                    content: Text('All values must be valid numbers'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+                return;
+              }
+              if ([devices!, items!, customers!, bills!].any((v) => v < 0)) {
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  const SnackBar(
+                    content: Text('Values cannot be negative'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+                return;
+              }
+
+              setDialogState(() => isSaving = true);
+              try {
+                await ref.update({
+                  'additional_devices_allowed': devices,
+                  'additional_items_allowed': items,
+                  'additional_customers_allowed': customers,
+                  'additional_bills_allowed': bills,
+                  'updatedAt': DateTime.now(),
+                });
+                if (Navigator.of(dialogContext).canPop()) {
+                  Navigator.of(dialogContext).pop(true);
+                }
+              } catch (e) {
+                setDialogState(() => isSaving = false);
+                ScaffoldMessenger.of(dialogContext).showSnackBar(
+                  SnackBar(
+                    content: Text('Failed to update settings: $e'),
+                    backgroundColor: Colors.red,
+                  ),
+                );
+              }
+            }
+
+            Widget buildNumberField(String label, TextEditingController c) {
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: TextFormField(
+                  controller: c,
+                  keyboardType: TextInputType.number,
+                  decoration: InputDecoration(
+                    labelText: label,
+                    border: const OutlineInputBorder(),
+                    isDense: true,
+                  ),
+                ),
+              );
+            }
+
+            return AlertDialog(
+              title: Text(
+                'Additional Settings - ${user.name ?? 'User'}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              content: SizedBox(
+                width: 460,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      buildNumberField(
+                        'Additional Devices Allowed',
+                        devicesController,
+                      ),
+                      buildNumberField(
+                        'Additional Items Allowed',
+                        itemsController,
+                      ),
+                      buildNumberField(
+                        'Additional Customers Allowed',
+                        customersController,
+                      ),
+                      buildNumberField(
+                        'Additional Bills Allowed',
+                        billsController,
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving ? null : save,
+                  child: isSaving
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Update'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    devicesController.dispose();
+    itemsController.dispose();
+    customersController.dispose();
+    billsController.dispose();
+
+    if (updated == true) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Additional settings updated successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _fetchUsers();
+    }
+  }
+
   Widget _buildSummaryItem(
     BuildContext context,
     String label,
@@ -898,6 +1233,401 @@ class _CustomersScreenState extends State<CustomersScreen> {
         Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
       ],
     );
+  }
+
+  Future<void> _showCreateCustomerDialog() async {
+    final formKey = GlobalKey<FormState>();
+    final emailController = TextEditingController();
+    final passwordController = TextEditingController();
+    final nameController = TextEditingController();
+    final addressController = TextEditingController();
+    final gstNumberController = TextEditingController();
+    final phoneController = TextEditingController();
+    var gstType = 'Regular';
+    var isPremiumCustomer = false;
+    var isSubmitting = false;
+
+    final created = await showDialog<bool>(
+      context: context,
+      barrierDismissible: false,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            Future<void> submit() async {
+              if (!(formKey.currentState?.validate() ?? false)) return;
+
+              setDialogState(() => isSubmitting = true);
+              final success = await _createCustomerWithAuth(
+                email: emailController.text.trim(),
+                password: passwordController.text,
+                name: nameController.text.trim(),
+                address: addressController.text.trim(),
+                gstType: gstType,
+                gstNumber: gstNumberController.text.trim().toUpperCase(),
+                phone: phoneController.text.trim(),
+                isPremiumCustomer: isPremiumCustomer,
+              );
+              if (!mounted) return;
+              if (success) {
+                Navigator.of(this.context).pop(true);
+              } else {
+                setDialogState(() => isSubmitting = false);
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Create Customer'),
+              content: SizedBox(
+                width: 520,
+                child: Form(
+                  key: formKey,
+                  child: SingleChildScrollView(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        TextFormField(
+                          controller: emailController,
+                          keyboardType: TextInputType.emailAddress,
+                          decoration: const InputDecoration(labelText: 'Email'),
+                          validator: (v) {
+                            final value = (v ?? '').trim();
+                            if (value.isEmpty) return 'Email is required';
+                            final emailRegex = RegExp(
+                              r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$',
+                            );
+                            if (!emailRegex.hasMatch(value)) {
+                              return 'Enter a valid email';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: passwordController,
+                          obscureText: true,
+                          decoration: const InputDecoration(
+                            labelText: 'Password',
+                          ),
+                          validator: (v) {
+                            if ((v ?? '').length < 6) {
+                              return 'Password must be at least 6 characters';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: nameController,
+                          maxLength: 25,
+                          decoration: const InputDecoration(
+                            labelText: 'Shop name',
+                            counterText: '',
+                          ),
+                          validator: (v) {
+                            if ((v ?? '').trim().isEmpty) {
+                              return 'Shop name is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: addressController,
+                          maxLength: 60,
+                          decoration: const InputDecoration(
+                            labelText: 'Shop address',
+                            counterText: '',
+                          ),
+                          validator: (v) {
+                            if ((v ?? '').trim().isEmpty) {
+                              return 'Address is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        DropdownButtonFormField<String>(
+                          initialValue: gstType,
+                          decoration: const InputDecoration(
+                            labelText: 'GST Type',
+                          ),
+                          items: const [
+                            DropdownMenuItem(
+                              value: 'Regular',
+                              child: Text('Regular'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Composition',
+                              child: Text('Composition'),
+                            ),
+                            DropdownMenuItem(
+                              value: 'Unregistered',
+                              child: Text('Unregistered'),
+                            ),
+                          ],
+                          onChanged: isSubmitting
+                              ? null
+                              : (v) {
+                                  if (v == null) return;
+                                  setDialogState(() => gstType = v);
+                                },
+                        ),
+                        if (gstType != 'Unregistered') ...[
+                          const SizedBox(height: 12),
+                          TextFormField(
+                            controller: gstNumberController,
+                            textCapitalization: TextCapitalization.characters,
+                            maxLength: 15,
+                            decoration: const InputDecoration(
+                              labelText: 'GST Number',
+                              counterText: '',
+                            ),
+                            validator: (v) {
+                              if (gstType == 'Unregistered') return null;
+                              if ((v ?? '').trim().isEmpty) {
+                                return 'GST Number is required';
+                              }
+                              return null;
+                            },
+                          ),
+                        ],
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: phoneController,
+                          keyboardType: TextInputType.phone,
+                          maxLength: 10,
+                          decoration: const InputDecoration(
+                            labelText: 'Phone Number',
+                            counterText: '',
+                          ),
+                          validator: (v) {
+                            if ((v ?? '').trim().isEmpty) {
+                              return 'Phone number is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 8),
+                        SwitchListTile.adaptive(
+                          value: isPremiumCustomer,
+                          onChanged: isSubmitting
+                              ? null
+                              : (v) => setDialogState(
+                                  () => isPremiumCustomer = v,
+                                ),
+                          contentPadding: EdgeInsets.zero,
+                          title: const Text('Premium customer'),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(context).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton.icon(
+                  onPressed: isSubmitting ? null : submit,
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 16,
+                          height: 16,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.person_add),
+                  label: Text(isSubmitting ? 'Creating...' : 'Create'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    emailController.dispose();
+    passwordController.dispose();
+    nameController.dispose();
+    addressController.dispose();
+    gstNumberController.dispose();
+    phoneController.dispose();
+
+    if (created == true) {
+      await _fetchUsers();
+    }
+  }
+
+  Future<bool> _createCustomerWithAuth({
+    required String email,
+    required String password,
+    required String name,
+    required String address,
+    required String gstType,
+    required String gstNumber,
+    required String phone,
+    required bool isPremiumCustomer,
+  }) async {
+    FirebaseApp? tempApp;
+    try {
+      final existingByEmail = await _firestore
+          .collection('users')
+          .where('email', isEqualTo: email)
+          .limit(1)
+          .get();
+      if (existingByEmail.docs.isNotEmpty) {
+        if (!mounted) return false;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('User with this email already exists'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return false;
+      }
+
+      final appName = 'create-user-${DateTime.now().millisecondsSinceEpoch}';
+      tempApp = await Firebase.initializeApp(
+        name: appName,
+        options: Firebase.app().options,
+      );
+      final tempAuth = FirebaseAuth.instanceFor(app: tempApp);
+      final cred = await tempAuth.createUserWithEmailAndPassword(
+        email: email,
+        password: password,
+      );
+      final newUid = cred.user?.uid;
+      if (newUid == null) {
+        throw FirebaseAuthException(
+          code: 'unknown',
+          message: 'Failed to create auth user',
+        );
+      }
+
+      final userRef = _firestore.collection('users').doc(newUid);
+      final appSettingsRef = userRef.collection('settings').doc('app');
+      final subProfilesRef = userRef.collection('subProfiles');
+
+      final now = FieldValue.serverTimestamp();
+      final randomPin = (100000 + DateTime.now().millisecond * 37) % 900000;
+      final pin = (100000 + randomPin).toString().padLeft(6, '0');
+
+      await userRef.set({
+        'email': email,
+        'name': name,
+        'address': address,
+        'gstNumber': gstNumber,
+        'userId': newUid,
+        'phone': phone,
+        'activeDevice': null,
+        'role': 'ADMIN',
+        'uploadErrorLog': false,
+        'resetSyncTime': false,
+        'item_version': 1,
+        'bill_version': 1,
+        'planId': null,
+        'last_bill_archived_time': null,
+        'accountExpiry': Timestamp.fromDate(
+          DateTime.now().add(const Duration(days: 30)),
+        ),
+        'is_premium_account': isPremiumCustomer,
+        'createdAt': now,
+        'updatedAt': now,
+        'lastLogin': now,
+      });
+
+      await appSettingsRef.set({
+        'gstType': gstType,
+        'labelSize': _kDefaultLabelSize,
+        'enableHsn': false,
+        'showTaxOnBill': gstType == 'Regular',
+        'flashOnScan': true,
+        'voiceBillingEnabled': true,
+        'applyRoundOff': false,
+        'rechargeAmount': _kDefaultRechargeAmount,
+        'adminMode': true,
+        'taxToggle': true,
+        'createdAt': now,
+        'updatedAt': now,
+      });
+
+      await subProfilesRef.add({
+        'prefix': '2',
+        'name': 'Super Admin',
+        'code': 'SA',
+        'avatar': 'assets/images/avatar1.svg',
+        'pin': pin,
+        'status': 'inactive',
+        'lastSyncTime': null,
+        'itemSyncTime': null,
+        'categorySyncTime': null,
+        'billSyncTime': null,
+        'itemMappingSyncTime': null,
+        'discountSyncTime': null,
+        'updatedAt': now,
+        'permissions': {
+          'Bills': true,
+          'Button': false,
+          'Categories': true,
+          'Credits & Payments': true,
+          'Discounts': true,
+          'Items': true,
+          'Reports': true,
+          'Service History': true,
+        },
+        'itemsOptions': {
+          'View items': true,
+          'Add items': true,
+          'Edit items': true,
+          'Delete items': true,
+          'Map items': true,
+          'Print label': true,
+        },
+        'categoriesOptions': {
+          'Add categories': true,
+          'Edit categories': true,
+          'Delete categories': true,
+        },
+        'reportsOptions': {
+          'View sales report': true,
+          'View invoice report': true,
+          'View inventory report': true,
+        },
+      });
+
+      if (!mounted) return true;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Customer created successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      return true;
+    } on FirebaseAuthException catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(e.message ?? 'Failed to create user'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    } catch (e) {
+      if (!mounted) return false;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error creating customer: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return false;
+    } finally {
+      if (tempApp != null) {
+        await tempApp.delete();
+      }
+    }
   }
 
   Widget _buildInfoRow(String label, String value, [Color? valueColor]) {
@@ -929,6 +1659,94 @@ class _CustomersScreenState extends State<CustomersScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildPremiumCustomerRow(UserModel user) {
+    final isPremium = user.isPremiumCustomer == true;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              'Premium customer:',
+              style: TextStyle(
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[700],
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    isPremium ? 'Yes' : 'No',
+                    style: TextStyle(
+                      color: isPremium ? Colors.amber[900] : Colors.black87,
+                      fontSize: 13,
+                      fontWeight:
+                          isPremium ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: isPremium,
+                  onChanged: (v) => _setPremiumCustomer(user, v),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setPremiumCustomer(UserModel user, bool value) async {
+    try {
+      final ref = await _resolveUserDocRef(user);
+      if (ref == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to find user document to update'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      await ref.update({
+        'is_premium_account': value,
+        'updatedAt': DateTime.now(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value
+                ? 'Marked as premium customer'
+                : 'Premium customer flag cleared',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _fetchUsers();
+    } catch (e) {
+      debugPrint('Error updating is_premium_account: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating premium flag: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildActiveDeviceRow(UserModel user) {
@@ -972,7 +1790,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       foregroundColor: Colors.red[700],
                       visualDensity: VisualDensity.compact,
                     ),
-                    child: const Text('Clear'),
+                    child: const Text('Clear Active Device'),
                   ),
               ],
             ),
@@ -1035,7 +1853,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                     foregroundColor: Colors.blue[700],
                     visualDensity: VisualDensity.compact,
                   ),
-                  child: const Text('Reset'),
+                  child: const Text('Reset Account Expiry'),
                 ),
               ],
             ),
@@ -1048,6 +1866,14 @@ class _CustomersScreenState extends State<CustomersScreen> {
   Future<DocumentReference<Map<String, dynamic>>?> _resolveUserDocRef(
     UserModel user,
   ) async {
+    // 0) Prefer the document id from the list we loaded (most reliable)
+    final listedDocId = user.docId?.trim();
+    if (listedDocId != null && listedDocId.isNotEmpty) {
+      final ref = _firestore.collection('users').doc(listedDocId);
+      final snap = await ref.get();
+      if (snap.exists) return ref;
+    }
+
     // 1) Try doc(userId) (common pattern)
     final uid = user.userId?.trim();
     if (uid != null && uid.isNotEmpty) {
@@ -1090,6 +1916,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
 
     if (picked == null) return;
+    if (!mounted) return;
 
     final confirm = await showDialog<bool>(
       context: context,

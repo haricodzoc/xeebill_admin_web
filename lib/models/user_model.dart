@@ -20,6 +20,10 @@ class UserModel {
   final int? itemVersion;
   final bool? resetSyncTime;
   final bool? uploadErrorLog;
+  final String? planId;
+  /// Firestore `is_premium_account` (preferred) or legacy `is_premium_account`.
+  /// Missing or null is treated as non-premium in the UI.
+  final bool? isPremiumCustomer;
 
   UserModel({
     this.docId,
@@ -40,7 +44,33 @@ class UserModel {
     this.itemVersion,
     this.resetSyncTime,
     this.uploadErrorLog,
+    this.planId,
+    this.isPremiumCustomer,
   });
+
+  static bool? _readPremiumFlag(dynamic v) {
+    if (v == null) return null;
+    if (v is bool) return v;
+    if (v is int) return v != 0;
+    if (v is String) {
+      final s = v.toLowerCase().trim();
+      if (s == 'true' || s == '1' || s == 'yes') return true;
+      if (s == 'false' || s == '0' || s == 'no') return false;
+    }
+    return null;
+  }
+
+  static String? _readPlanId(dynamic v) {
+    if (v == null) return null;
+    var s = v.toString().trim();
+    if (s.isEmpty) return '';
+    if ((s.startsWith('"') && s.endsWith('"')) ||
+        (s.startsWith("'") && s.endsWith("'"))) {
+      s = s.substring(1, s.length - 1).trim();
+    }
+    if (s.toLowerCase() == 'null') return null;
+    return s;
+  }
 
   factory UserModel.fromFirestore(DocumentSnapshot doc) {
     
@@ -66,6 +96,10 @@ class UserModel {
       itemVersion: data?['item_version'] as int?,
       resetSyncTime: data?['resetSyncTime'] as bool?,
       uploadErrorLog: data?['uploadErrorLog'] as bool?,
+      planId: _readPlanId(data?['planId']),
+      isPremiumCustomer: _readPremiumFlag(
+        data?['is_premium_account'] ,
+      ),
     );
   }
 

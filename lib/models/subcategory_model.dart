@@ -23,8 +23,8 @@ class SubCategory {
 
   factory SubCategory.fromJson(Map<String, dynamic> json) {
     return SubCategory(
-      code: json['code'] ?? '',
-      name: json['name'] ?? '',
+      code: json['code']?.toString() ?? '',
+      name: json['name']?.toString() ?? '',
       attributes: json['attributes'] ?? '',
       attributeTypes: json['attribute_types'] ?? '',
       hsnCode: json['hsn_code'],

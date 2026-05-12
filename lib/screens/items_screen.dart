@@ -2,7 +2,16 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'dart:convert';
 import '../models/item_model.dart';
+import '../models/category_model.dart';
+import '../utils/item_list_filters.dart';
 import 'edit_item_dialog.dart';
+import 'package:intl/intl.dart';
+
+class _LocationOption {
+  final String id;
+  final String name;
+  const _LocationOption({required this.id, required this.name});
+}
 
 class ItemsScreen extends StatefulWidget {
   final String userId;
@@ -14,17 +23,132 @@ class ItemsScreen extends StatefulWidget {
 }
 
 class _ItemsScreenState extends State<ItemsScreen> {
+  /// Location filter value for items tied to sub-profiles not mapped to any business location.
+  static const String _defaultLocationFilterValue = '__default_unmapped_profiles__';
+
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
+  final TextEditingController _searchController = TextEditingController();
   bool _isLoading = true;
   String? _errorMessage;
   List<ItemModel> _items = [];
+  String _searchQuery = '';
+  String? _userDocumentId;
+  Map<String, List<Map<String, dynamic>>> _itemMappingsByCode = {};
   String?
   _checkingDeleteItemCode; // Track which item is being checked for deletion
+
+  List<CategoryModel> _categoriesForFilter = [];
+  List<_LocationOption> _locationsForFilter = [];
+
+  String? _appliedLocationId;
+  final Set<String> _appliedCategoryCodes = {};
+  final Map<String, String> _appliedAttributeFilters = {};
+  final Map<String, int> _appliedAttributeTypes = {};
 
   @override
   void initState() {
     super.initState();
     _fetchItems();
+  }
+
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  String _normalizeForSearch(String input) {
+    final lower = input.trim().toLowerCase();
+    final noSpace = lower.replaceAll(RegExp(r'[\s\u00A0]+'), '');
+    return noSpace.replaceAll(RegExp(r'[^a-z0-9]'), '');
+  }
+
+  bool get _filterActive =>
+      (_appliedLocationId != null && _appliedLocationId!.trim().isNotEmpty) ||
+      _appliedCategoryCodes.isNotEmpty ||
+      _appliedAttributeFilters.isNotEmpty;
+
+  bool get _showLocationFilterControls => _locationsForFilter.isNotEmpty;
+
+  /// Items with no `location_id`, empty value, or an id that does not match any loaded location.
+  bool _itemMatchesDefaultLocationFilter(ItemModel item) {
+    final id = (item.locationId ?? '').trim();
+    if (id.isEmpty) return true;
+    return !_locationsForFilter.any((l) => l.id == id);
+  }
+
+  List<ItemModel> get _visibleItems {
+    Iterable<ItemModel> list = _items;
+    if (_filterActive) {
+      final loc = _appliedLocationId?.trim();
+      if (loc != null && loc.isNotEmpty) {
+        if (loc == _defaultLocationFilterValue) {
+          list = list.where(_itemMatchesDefaultLocationFilter);
+        } else {
+          list = list.where((i) => (i.locationId ?? '').trim() == loc);
+        }
+      }
+      if (_appliedCategoryCodes.isNotEmpty) {
+        list = list.where((i) => _appliedCategoryCodes.contains(i.categoryCode));
+      }
+      if (_appliedAttributeFilters.isNotEmpty) {
+        list = list.where(
+          (i) => itemMatchesAttributeFilters(
+            i,
+            _appliedAttributeFilters,
+            _appliedAttributeTypes,
+          ),
+        );
+      }
+    }
+    final query = _normalizeForSearch(_searchQuery);
+    if (query.isEmpty) return list.toList();
+    return list.where((item) {
+      final normalizedName = _normalizeForSearch(item.name);
+      final normalizedCode = _normalizeForSearch(item.code);
+      return normalizedName.contains(query) || normalizedCode.contains(query);
+    }).toList();
+  }
+
+  String _filterStatusSummary() {
+    final parts = <String>[];
+    if (_appliedCategoryCodes.isNotEmpty) {
+      final names = _categoriesForFilter
+          .where((c) => _appliedCategoryCodes.contains(c.code))
+          .map((c) => c.name)
+          .join(', ');
+      parts.add('Category: ${names.isEmpty ? _appliedCategoryCodes.join(', ') : names}');
+    }
+    final locId = _appliedLocationId?.trim();
+    if (locId != null && locId.isNotEmpty) {
+      if (locId == _defaultLocationFilterValue) {
+        parts.add('Location: Default (no location assigned)');
+      } else {
+        String locName = locId;
+        for (final l in _locationsForFilter) {
+          if (l.id == locId) {
+            locName = l.name;
+            break;
+          }
+        }
+        parts.add('Location: $locName');
+      }
+    }
+    for (final e in _appliedAttributeFilters.entries) {
+      if (e.value.isEmpty) continue;
+      if (e.key.endsWith('_from') || e.key.endsWith('_to')) {
+        try {
+          final d = DateTime.parse(e.value);
+          final label = e.key.endsWith('_from') ? 'from' : 'to';
+          parts.add('${e.key} ($label: ${DateFormat('dd MMM yyyy').format(d)})');
+        } catch (_) {
+          parts.add('${e.key}: ${e.value}');
+        }
+      } else {
+        parts.add('${e.key}: ${e.value}');
+      }
+    }
+    return parts.join(' | ');
   }
 
   Future<void> _fetchItems() async {
@@ -69,15 +193,35 @@ class _ItemsScreenState extends State<ItemsScreen> {
         });
         return;
       }
+      _userDocumentId = userDocumentId;
 
       // Fetch items directly from users/{userId}/items subcollection
       debugPrint('Fetching items from users/$userDocumentId/items');
 
-      final itemsSnapshot = await _firestore
+      final itemsFuture = _firestore
           .collection('users')
           .doc(userDocumentId)
           .collection('items')
           .get();
+      final categoriesFuture = _firestore
+          .collection('users')
+          .doc(userDocumentId)
+          .collection('categories')
+          .get();
+      final locationsFuture = _firestore
+          .collection('users')
+          .doc(userDocumentId)
+          .collection('locations')
+          .get();
+
+      final results = await Future.wait([
+        itemsFuture,
+        categoriesFuture,
+        locationsFuture,
+      ]);
+      final itemsSnapshot = results[0] as QuerySnapshot;
+      final categoriesSnapshot = results[1] as QuerySnapshot;
+      final locationsSnapshot = results[2] as QuerySnapshot;
 
       debugPrint('Found ${itemsSnapshot.docs.length} items');
 
@@ -92,13 +236,37 @@ class _ItemsScreenState extends State<ItemsScreen> {
         }
       }
 
+      final List<CategoryModel> cats = [];
+      for (final d in categoriesSnapshot.docs) {
+        try {
+          cats.add(CategoryModel.fromFirestore(d));
+        } catch (e) {
+          debugPrint('Error parsing category ${d.id}: $e');
+        }
+      }
+      cats.sort((a, b) => naturalSortComparator(a.name, b.name));
+
+      final List<_LocationOption> locs = [];
+      for (final d in locationsSnapshot.docs) {
+        final data = d.data() as Map<String, dynamic>?;
+        if (data == null) continue;
+        final name = (data['name'] ?? '').toString().trim();
+        locs.add(_LocationOption(id: d.id, name: name.isEmpty ? d.id : name));
+      }
+      locs.sort((a, b) => naturalSortComparator(a.name, b.name));
+
       // Sort items by name
       allItems.sort((a, b) {
         return a.name.compareTo(b.name);
       });
 
+      final itemMappingsByCode = await _fetchItemMappingsByCode(userDocumentId);
+
       setState(() {
         _items = allItems;
+        _itemMappingsByCode = itemMappingsByCode;
+        _categoriesForFilter = cats;
+        _locationsForFilter = locs;
         _isLoading = false;
       });
 
@@ -112,6 +280,646 @@ class _ItemsScreenState extends State<ItemsScreen> {
     }
   }
 
+  CategoryModel? _categoryByCode(String code) {
+    for (final c in _categoriesForFilter) {
+      if (c.code == code) return c;
+    }
+    return null;
+  }
+
+  /// Top-level categories (`parent_code` empty). Falls back to all active categories if none.
+  List<CategoryModel> get _parentCategoriesForDropdown {
+    final roots = _categoriesForFilter
+        .where((c) => c.active && c.parentCode.trim().isEmpty)
+        .toList();
+    roots.sort((a, b) => naturalSortComparator(a.name, b.name));
+    if (roots.isNotEmpty) return roots;
+    final flat = _categoriesForFilter.where((c) => c.active).toList()
+      ..sort((a, b) => naturalSortComparator(a.name, b.name));
+    return flat;
+  }
+
+  List<CategoryModel> _subcategoriesForParentCode(String parentCode) {
+    final subs = _categoriesForFilter
+        .where((c) => c.active && c.parentCode == parentCode)
+        .toList();
+    subs.sort((a, b) => naturalSortComparator(a.name, b.name));
+    return subs;
+  }
+
+  /// Resolved label for an item's location, or a fallback when ids exist but no match.
+  String _locationLabelForItem(ItemModel item) {
+    final id = (item.locationId ?? '').trim();
+    if (id.isEmpty) return '—';
+    for (final l in _locationsForFilter) {
+      if (l.id == id) return l.name;
+    }
+    return id;
+  }
+
+  Future<Map<String, List<Map<String, dynamic>>>> _fetchItemMappingsByCode(
+    String userDocumentId,
+  ) async {
+    final grouped = <String, List<Map<String, dynamic>>>{};
+    try {
+      final mappingsSnapshot = await _firestore
+          .collection('users')
+          .doc(userDocumentId)
+          .collection('item_mappings')
+          .get();
+
+      for (final doc in mappingsSnapshot.docs) {
+        final data = doc.data();
+        final itemCode = (data['item_code'] ?? '').toString().trim();
+        if (itemCode.isEmpty) continue;
+        grouped.putIfAbsent(itemCode, () => []);
+        grouped[itemCode]!.add({'doc_id': doc.id, ...data});
+      }
+    } catch (e) {
+      debugPrint('Error fetching item mappings: $e');
+    }
+    return grouped;
+  }
+
+  void _rebuildDialogAttributeMaps(
+    List<CategoryModel> selected,
+    Map<String, List<String>> categoryAttrsOut,
+    Map<String, int> attributeTypesOut,
+    Map<String, String?> selectedAttrs,
+  ) {
+    categoryAttrsOut.clear();
+    attributeTypesOut.clear();
+    if (selected.length != 1) return;
+    final cat = selected.first;
+    if (cat.attributeTypes.isNotEmpty) {
+      try {
+        final typesMap = jsonDecode(cat.attributeTypes) as Map<String, dynamic>;
+        typesMap.forEach((k, v) {
+          attributeTypesOut[k] = v is int ? v : int.tryParse(v.toString()) ?? 1;
+        });
+      } catch (e) {
+        debugPrint('attributeTypes parse: $e');
+      }
+    }
+    if (cat.attributes.isEmpty) return;
+    try {
+      final attrsMap = jsonDecode(cat.attributes) as Map<String, dynamic>;
+      attrsMap.forEach((key, value) {
+        final attrType = attributeTypesOut[key] ?? 1;
+        if (value is! Map<String, dynamic>) return;
+        if (attrType == 3 || attrType == 4) {
+          selectedAttrs.putIfAbsent(key, () => null);
+        } else {
+          final vals = value.entries
+              .where((e) => e.value == true)
+              .map((e) => e.key)
+              .toList();
+          if (vals.isNotEmpty) {
+            vals.sort(naturalSortComparator);
+            categoryAttrsOut[key] = vals;
+          }
+        }
+      });
+    } catch (e) {
+      debugPrint('attributes parse: $e');
+    }
+  }
+
+  Future<void> _showFilterItemsDialog() async {
+    String? dialogParentCode;
+    String? dialogLeafCode;
+
+    if (_appliedCategoryCodes.length == 1) {
+      final code = _appliedCategoryCodes.first;
+      final cat = _categoryByCode(code);
+      if (cat != null) {
+        if (cat.parentCode.trim().isNotEmpty) {
+          dialogParentCode = cat.parentCode;
+          dialogLeafCode = cat.code;
+        } else {
+          dialogParentCode = cat.code;
+          dialogLeafCode = null;
+        }
+      }
+    }
+
+    String? dialogLocationId = _appliedLocationId;
+    final dialogCategoryAttributes = <String, List<String>>{};
+    final dialogAttributeTypes = <String, int>{};
+    final dialogSelectedAttributes = <String, String?>{}
+      ..addAll(_appliedAttributeFilters.map((k, v) => MapEntry(k, v)));
+
+    CategoryModel? effectiveCategoryForDialog() {
+      if (dialogParentCode == null) return null;
+      final parent = _categoryByCode(dialogParentCode!);
+      if (parent == null) return null;
+      final subs = _subcategoriesForParentCode(parent.code);
+      if (subs.isEmpty) return parent;
+      if (dialogLeafCode == null) return null;
+      return _categoryByCode(dialogLeafCode!);
+    }
+
+    void syncAttrMaps() {
+      dialogCategoryAttributes.clear();
+      dialogAttributeTypes.clear();
+      final eff = effectiveCategoryForDialog();
+      if (eff == null) {
+        dialogSelectedAttributes.clear();
+        return;
+      }
+      _rebuildDialogAttributeMaps(
+        [eff],
+        dialogCategoryAttributes,
+        dialogAttributeTypes,
+        dialogSelectedAttributes,
+      );
+      final keep = <String>{};
+      for (final k in dialogCategoryAttributes.keys) {
+        keep.add(k);
+      }
+      for (final e in dialogAttributeTypes.entries) {
+        keep.add(e.key);
+        if (e.value == 4) {
+          keep.add('${e.key}_from');
+          keep.add('${e.key}_to');
+        }
+      }
+      dialogSelectedAttributes.removeWhere((k, _) => !keep.contains(k));
+    }
+
+    syncAttrMaps();
+
+    await showDialog<void>(
+      context: context,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setDialogState) {
+            return Dialog(
+              insetPadding: const EdgeInsets.all(16),
+              child: SizedBox(
+                width: MediaQuery.of(ctx).size.width * 0.9,
+                height: MediaQuery.of(ctx).size.height * 0.88,
+                child: Column(
+                  children: [
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        children: [
+                          Icon(Icons.filter_list, color: Theme.of(ctx).colorScheme.primary),
+                          const SizedBox(width: 8),
+                          const Text(
+                            'Filter Items',
+                            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
+                          ),
+                          const Spacer(),
+                          IconButton(
+                            icon: const Icon(Icons.close),
+                            onPressed: () => Navigator.pop(ctx),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Expanded(
+                      child: SingleChildScrollView(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Category',
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.w600,
+                                color: Theme.of(ctx).colorScheme.primary,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            InputDecorator(
+                              decoration: const InputDecoration(
+                                border: OutlineInputBorder(),
+                                contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                labelText: 'Select category',
+                              ),
+                              child: DropdownButtonHideUnderline(
+                                child: DropdownButton<String?>(
+                                  isExpanded: true,
+                                  value: dialogParentCode,
+                                  hint: const Text('Select category'),
+                                  items: [
+                                    const DropdownMenuItem<String?>(
+                                      value: null,
+                                      child: Text('None'),
+                                    ),
+                                    ..._parentCategoriesForDropdown.map(
+                                      (c) => DropdownMenuItem<String?>(
+                                        value: c.code,
+                                        child: Text(c.name),
+                                      ),
+                                    ),
+                                  ],
+                                  onChanged: (v) {
+                                    setDialogState(() {
+                                      dialogParentCode = v;
+                                      dialogLeafCode = null;
+                                      syncAttrMaps();
+                                    });
+                                  },
+                                ),
+                              ),
+                            ),
+                            Builder(
+                              builder: (context) {
+                                if (dialogParentCode == null) return const SizedBox.shrink();
+                                final parent = _categoryByCode(dialogParentCode!);
+                                if (parent == null) return const SizedBox.shrink();
+                                final subs = _subcategoriesForParentCode(parent.code);
+                                if (subs.isEmpty) return const SizedBox.shrink();
+                                return Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const SizedBox(height: 20),
+                                    Text(
+                                      'Subcategory',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w600,
+                                        color: Theme.of(ctx).colorScheme.primary,
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    InputDecorator(
+                                      decoration: const InputDecoration(
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                        labelText: 'Select subcategory',
+                                      ),
+                                      child: DropdownButtonHideUnderline(
+                                        child: DropdownButton<String?>(
+                                          isExpanded: true,
+                                          value: dialogLeafCode,
+                                          hint: const Text('Select subcategory'),
+                                          items: subs
+                                              .map(
+                                                (c) => DropdownMenuItem<String?>(
+                                                  value: c.code,
+                                                  child: Text(c.name),
+                                                ),
+                                              )
+                                              .toList(),
+                                          onChanged: (v) {
+                                            setDialogState(() {
+                                              dialogLeafCode = v;
+                                              syncAttrMaps();
+                                            });
+                                          },
+                                        ),
+                                      ),
+                                    ),
+                                    if (dialogLeafCode == null) ...[
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        'Choose a subcategory to filter items and set attributes.',
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                );
+                              },
+                            ),
+                            if (_showLocationFilterControls) ...[
+                              const SizedBox(height: 20),
+                              Text(
+                                'Location',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(ctx).colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              InputDecorator(
+                                decoration: const InputDecoration(
+                                  border: OutlineInputBorder(),
+                                  contentPadding: EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                                ),
+                                child: DropdownButtonHideUnderline(
+                                  child: DropdownButton<String?>(
+                                    isExpanded: true,
+                                    value: dialogLocationId,
+                                    hint: const Text('All locations'),
+                                    items: [
+                                      const DropdownMenuItem<String?>(
+                                        value: null,
+                                        child: Text('All locations'),
+                                      ),
+                                      DropdownMenuItem<String?>(
+                                        value: _defaultLocationFilterValue,
+                                        child: const Text(
+                                          'Default — no location assigned',
+                                        ),
+                                      ),
+                                      ..._locationsForFilter.map(
+                                        (l) => DropdownMenuItem<String?>(
+                                          value: l.id,
+                                          child: Text(l.name),
+                                        ),
+                                      ),
+                                    ],
+                                    onChanged: (v) => setDialogState(() => dialogLocationId = v),
+                                  ),
+                                ),
+                              ),
+                            ],
+                            if (effectiveCategoryForDialog() != null) ...[
+                              const SizedBox(height: 20),
+                              Text(
+                                'Select attributes',
+                                style: TextStyle(
+                                  fontSize: 14,
+                                  fontWeight: FontWeight.w600,
+                                  color: Theme.of(ctx).colorScheme.primary,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              ...() {
+                                final entries = dialogCategoryAttributes.entries.toList()
+                                  ..sort((a, b) => naturalSortComparator(a.key, b.key));
+                                return entries.map((entry) {
+                                  final key = entry.key;
+                                  final type = dialogAttributeTypes[key] ?? 1;
+                                  final multi = type == 2;
+                                  final opts = entry.value;
+                                  final cur = dialogSelectedAttributes[key];
+                                  if (multi) {
+                                    final selectedSet = (cur ?? '')
+                                        .split(',')
+                                        .map((s) => s.trim())
+                                        .where((s) => s.isNotEmpty)
+                                        .toSet();
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: Column(
+                                        crossAxisAlignment: CrossAxisAlignment.start,
+                                        children: [
+                                          Text(key, style: const TextStyle(fontWeight: FontWeight.w500)),
+                                          const SizedBox(height: 6),
+                                          Wrap(
+                                            spacing: 6,
+                                            runSpacing: 6,
+                                            children: opts.map((opt) {
+                                              final on = selectedSet.contains(opt);
+                                              return FilterChip(
+                                                label: Text(opt),
+                                                selected: on,
+                                                onSelected: (v) {
+                                                  setDialogState(() {
+                                                    if (v) {
+                                                      selectedSet.add(opt);
+                                                    } else {
+                                                      selectedSet.remove(opt);
+                                                    }
+                                                    dialogSelectedAttributes[key] = selectedSet.isEmpty
+                                                        ? null
+                                                        : selectedSet.join(',');
+                                                  });
+                                                },
+                                              );
+                                            }).toList(),
+                                          ),
+                                        ],
+                                      ),
+                                    );
+                                  }
+                                  return Padding(
+                                    padding: const EdgeInsets.only(bottom: 12),
+                                    child: DropdownButtonFormField<String?>(
+                                      key: ValueKey('attr_sel_$key'),
+                                      initialValue: cur,
+                                      decoration: InputDecoration(
+                                        labelText: key,
+                                        border: const OutlineInputBorder(),
+                                      ),
+                                      items: [
+                                        const DropdownMenuItem<String?>(
+                                          value: null,
+                                          child: Text('Any'),
+                                        ),
+                                        ...opts.map(
+                                          (o) => DropdownMenuItem<String?>(value: o, child: Text(o)),
+                                        ),
+                                      ],
+                                      onChanged: (v) {
+                                        setDialogState(() {
+                                          dialogSelectedAttributes[key] = v;
+                                        });
+                                      },
+                                    ),
+                                  );
+                                }).toList();
+                              }(),
+                              ...() {
+                                final textDateKeys = dialogAttributeTypes.entries
+                                    .where((e) => e.value == 3 || e.value == 4)
+                                    .map((e) => e.key)
+                                    .toList()
+                                  ..sort(naturalSortComparator);
+                                return textDateKeys.map<Widget>((attrName) {
+                                  final t = dialogAttributeTypes[attrName] ?? 1;
+                                  if (t == 3) {
+                                    return Padding(
+                                      padding: const EdgeInsets.only(bottom: 12),
+                                      child: TextFormField(
+                                        key: ValueKey('attr_txt_$attrName'),
+                                        initialValue: dialogSelectedAttributes[attrName] ?? '',
+                                        decoration: InputDecoration(
+                                          labelText: attrName,
+                                          border: const OutlineInputBorder(),
+                                        ),
+                                        onChanged: (v) {
+                                          dialogSelectedAttributes[attrName] =
+                                              v.trim().isEmpty ? null : v.trim();
+                                        },
+                                      ),
+                                    );
+                                  }
+                                  final fromKey = '${attrName}_from';
+                                  final toKey = '${attrName}_to';
+                                  DateTime? parseD(String? s) {
+                                    if (s == null || s.isEmpty) return null;
+                                    try {
+                                      return DateTime.parse(s);
+                                    } catch (_) {
+                                      return null;
+                                    }
+                                  }
+
+                                  final fromD = parseD(dialogSelectedAttributes[fromKey]);
+                                  final toD = parseD(dialogSelectedAttributes[toKey]);
+
+                                  return Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      ListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        title: Text('$attrName (from)'),
+                                        subtitle: Text(
+                                          fromD != null ? DateFormat('dd MMM yyyy').format(fromD) : '—',
+                                        ),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.calendar_today),
+                                              onPressed: () async {
+                                                final picked = await showDatePicker(
+                                                  context: ctx,
+                                                  initialDate: fromD ?? DateTime.now(),
+                                                  firstDate: DateTime(2000),
+                                                  lastDate: DateTime(2100),
+                                                );
+                                                if (picked != null) {
+                                                  setDialogState(() {
+                                                    dialogSelectedAttributes[fromKey] =
+                                                        picked.toIso8601String();
+                                                  });
+                                                }
+                                              },
+                                            ),
+                                            if (fromD != null)
+                                              IconButton(
+                                                icon: const Icon(Icons.clear),
+                                                onPressed: () {
+                                                  setDialogState(() {
+                                                    dialogSelectedAttributes[fromKey] = null;
+                                                  });
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      ListTile(
+                                        contentPadding: EdgeInsets.zero,
+                                        title: Text('$attrName (to)'),
+                                        subtitle: Text(
+                                          toD != null ? DateFormat('dd MMM yyyy').format(toD) : '—',
+                                        ),
+                                        trailing: Row(
+                                          mainAxisSize: MainAxisSize.min,
+                                          children: [
+                                            IconButton(
+                                              icon: const Icon(Icons.calendar_today),
+                                              onPressed: () async {
+                                                final picked = await showDatePicker(
+                                                  context: ctx,
+                                                  initialDate: toD ?? fromD ?? DateTime.now(),
+                                                  firstDate: fromD ?? DateTime(2000),
+                                                  lastDate: DateTime(2100),
+                                                );
+                                                if (picked != null) {
+                                                  setDialogState(() {
+                                                    dialogSelectedAttributes[toKey] =
+                                                        picked.toIso8601String();
+                                                  });
+                                                }
+                                              },
+                                            ),
+                                            if (toD != null)
+                                              IconButton(
+                                                icon: const Icon(Icons.clear),
+                                                onPressed: () {
+                                                  setDialogState(() {
+                                                    dialogSelectedAttributes[toKey] = null;
+                                                  });
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                    ],
+                                  );
+                                }).toList();
+                              }(),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const Divider(height: 1),
+                    Padding(
+                      padding: const EdgeInsets.all(16),
+                      child: Row(
+                        mainAxisAlignment: MainAxisAlignment.end,
+                        children: [
+                          TextButton(
+                            onPressed: () {
+                              setState(() {
+                                _appliedLocationId = null;
+                                _appliedCategoryCodes.clear();
+                                _appliedAttributeFilters.clear();
+                                _appliedAttributeTypes.clear();
+                              });
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Clear all'),
+                          ),
+                          const SizedBox(width: 12),
+                          FilledButton(
+                            onPressed: () {
+                              final hasLoc =
+                                  dialogLocationId != null && dialogLocationId!.trim().isNotEmpty;
+                              final eff = effectiveCategoryForDialog();
+                              final hasCat = eff != null;
+                              if (!hasLoc && !hasCat) {
+                                setState(() {
+                                  _appliedLocationId = null;
+                                  _appliedCategoryCodes.clear();
+                                  _appliedAttributeFilters.clear();
+                                  _appliedAttributeTypes.clear();
+                                });
+                                Navigator.pop(ctx);
+                                return;
+                              }
+                              setState(() {
+                                _appliedLocationId = dialogLocationId?.trim().isEmpty == true
+                                    ? null
+                                    : dialogLocationId?.trim();
+                                _appliedCategoryCodes.clear();
+                                if (eff != null) {
+                                  _appliedCategoryCodes.add(eff.code);
+                                }
+                                _appliedAttributeFilters.clear();
+                                _appliedAttributeTypes.clear();
+                                if (eff != null) {
+                                  dialogSelectedAttributes.forEach((k, v) {
+                                    if (v != null && v.isNotEmpty) {
+                                      _appliedAttributeFilters[k] = v;
+                                    }
+                                  });
+                                  _appliedAttributeTypes.addAll(dialogAttributeTypes);
+                                }
+                              });
+                              Navigator.pop(ctx);
+                            },
+                            child: const Text('Apply'),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -123,7 +931,9 @@ class _ItemsScreenState extends State<ItemsScreen> {
             const Text('Items'),
             if (!_isLoading && _items.isNotEmpty)
               Text(
-                '${_items.length} item${_items.length == 1 ? '' : 's'}',
+                (_filterActive || _normalizeForSearch(_searchQuery).isNotEmpty)
+                    ? '${_visibleItems.length} / ${_items.length} items'
+                    : '${_items.length} item${_items.length == 1 ? '' : 's'}',
                 style: const TextStyle(
                   fontSize: 12,
                   fontWeight: FontWeight.normal,
@@ -132,6 +942,11 @@ class _ItemsScreenState extends State<ItemsScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.tune),
+            tooltip: 'Filter by location & category',
+            onPressed: _showFilterItemsDialog,
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
@@ -189,18 +1004,117 @@ class _ItemsScreenState extends State<ItemsScreen> {
             )
           : RefreshIndicator(
               onRefresh: _fetchItems,
-              child: ListView.builder(
-                padding: const EdgeInsets.all(16.0),
-                itemCount: _items.length,
-                itemBuilder: (context, index) {
-                  return _buildItemCard(_items[index]);
-                },
+              child: Column(
+                children: [
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 8, 16, 0),
+                    child: Align(
+                      alignment: Alignment.centerLeft,
+                      child: TextButton.icon(
+                        onPressed: _showFilterItemsDialog,
+                        icon: const Icon(Icons.tune, size: 18),
+                        label: const Text('Filter items'),
+                      ),
+                    ),
+                  ),
+                  if (_filterActive)
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(16, 4, 16, 0),
+                      child: Material(
+                        color: Theme.of(context).colorScheme.primaryContainer.withValues(alpha: 0.35),
+                        borderRadius: BorderRadius.circular(8),
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+                          child: Row(
+                            children: [
+                              Icon(
+                                Icons.filter_list,
+                                size: 18,
+                                color: Theme.of(context).colorScheme.primary,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _filterStatusSummary(),
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Theme.of(context).colorScheme.onSurface,
+                                  ),
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.clear, size: 18),
+                                tooltip: 'Clear filters',
+                                onPressed: () {
+                                  setState(() {
+                                    _appliedLocationId = null;
+                                    _appliedCategoryCodes.clear();
+                                    _appliedAttributeFilters.clear();
+                                    _appliedAttributeTypes.clear();
+                                  });
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                    ),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(16, 16, 16, 0),
+                    child: TextField(
+                      controller: _searchController,
+                      decoration: InputDecoration(
+                        hintText: 'Search by item name or code',
+                        prefixIcon: const Icon(Icons.search),
+                        suffixIcon: _searchQuery.isEmpty
+                            ? null
+                            : IconButton(
+                                icon: const Icon(Icons.clear),
+                                onPressed: () {
+                                  setState(() {
+                                    _searchController.clear();
+                                    _searchQuery = '';
+                                  });
+                                },
+                              ),
+                        border: OutlineInputBorder(
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                      ),
+                      onChanged: (value) {
+                        setState(() {
+                          _searchQuery = value;
+                        });
+                      },
+                    ),
+                  ),
+                  Expanded(
+                    child: _visibleItems.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No items match the current filters or search',
+                              style: TextStyle(
+                                color: Colors.grey[600],
+                                fontSize: 15,
+                              ),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: const EdgeInsets.all(16.0),
+                            itemCount: _visibleItems.length,
+                            itemBuilder: (context, index) {
+                              return _buildItemCard(_visibleItems[index]);
+                            },
+                          ),
+                  ),
+                ],
               ),
             ),
     );
   }
 
   Widget _buildItemCard(ItemModel item) {
+    final mappings = _itemMappingsByCode[item.code] ?? const [];
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
       elevation: 2,
@@ -274,6 +1188,23 @@ class _ItemsScreenState extends State<ItemsScreen> {
                     ),
                     labelStyle: const TextStyle(fontSize: 12),
                   ),
+                  if (_locationsForFilter.isNotEmpty)
+                    Chip(
+                      avatar: Icon(
+                        Icons.place_outlined,
+                        size: 16,
+                        color: Colors.purple[700],
+                      ),
+                      label: Text(
+                        'Location: ${_locationLabelForItem(item)}',
+                        style: const TextStyle(fontSize: 12),
+                      ),
+                      backgroundColor: Colors.purple[50],
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 8,
+                        vertical: 4,
+                      ),
+                    ),
                   Chip(
                     label: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -298,6 +1229,43 @@ class _ItemsScreenState extends State<ItemsScreen> {
                   ),
                 ],
               ),
+              if (mappings.isNotEmpty) ...[
+                const SizedBox(height: 10),
+                Text(
+                  'Mapped Info (${mappings.length})',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[800],
+                    fontSize: 13,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                ...mappings.map((mapping) {
+                  final mapCode = (mapping['map_code'] ?? '').toString();
+                  final itemId = (mapping['item_id'] ?? '').toString();
+                  return Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(bottom: 6),
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.teal[50],
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: Colors.teal.shade100),
+                    ),
+                    child: Text(
+                      'Map Code: ${mapCode.isEmpty ? '-' : mapCode} | Item ID: ${itemId.isEmpty ? '-' : itemId}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.teal.shade900,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  );
+                }),
+              ],
             ],
           ),
         ),
@@ -316,6 +1284,7 @@ class _ItemsScreenState extends State<ItemsScreen> {
       }
     }
 
+    final mappings = _itemMappingsByCode[item.code] ?? const [];
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -521,6 +1490,43 @@ class _ItemsScreenState extends State<ItemsScreen> {
                         ),
                       ),
                     ],
+                    if (mappings.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      const Text(
+                        'Mapped Info',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      ...mappings.map((mapping) {
+                        return Container(
+                          margin: const EdgeInsets.only(bottom: 10),
+                          padding: const EdgeInsets.all(12),
+                          decoration: BoxDecoration(
+                            color: Colors.teal[50],
+                            borderRadius: BorderRadius.circular(10),
+                            border: Border.all(color: Colors.teal.shade100),
+                          ),
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: mapping.entries.map((entry) {
+                              return Padding(
+                                padding: const EdgeInsets.only(bottom: 4),
+                                child: Text(
+                                  '${entry.key}: ${entry.value}',
+                                  style: const TextStyle(fontSize: 13),
+                                ),
+                              );
+                            }).toList(),
+                          ),
+                        );
+                      }),
+                    ] else ...[
+                      const SizedBox(height: 16),
+                      _buildDetailRow('Mapped Info', 'No mappings found'),
+                    ],
                     const SizedBox(height: 20),
                   ],
                 ),
@@ -574,6 +1580,9 @@ class _ItemsScreenState extends State<ItemsScreen> {
 
   Future<String?> _getUserDocumentId() async {
     try {
+      if (_userDocumentId != null && _userDocumentId!.isNotEmpty) {
+        return _userDocumentId;
+      }
       // Try to find user by userId field
       final userQuery = await _firestore
           .collection('users')
@@ -582,7 +1591,8 @@ class _ItemsScreenState extends State<ItemsScreen> {
           .get();
 
       if (userQuery.docs.isNotEmpty) {
-        return userQuery.docs.first.id;
+        _userDocumentId = userQuery.docs.first.id;
+        return _userDocumentId;
       }
 
       // Try by document ID
@@ -592,7 +1602,8 @@ class _ItemsScreenState extends State<ItemsScreen> {
           .get();
 
       if (userDoc.exists) {
-        return widget.userId;
+        _userDocumentId = widget.userId;
+        return _userDocumentId;
       }
 
       return null;
@@ -705,6 +1716,8 @@ class _ItemsScreenState extends State<ItemsScreen> {
         }
         return;
       }
+
+      if (!mounted) return;
 
       // No bills using it, show confirmation dialog
       final confirm = await showDialog<bool>(

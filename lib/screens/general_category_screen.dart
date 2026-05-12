@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -22,88 +23,35 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
   bool _isLoading = true;
   bool _isSearching = false;
   final TextEditingController _searchController = TextEditingController();
+  String? _highlightCategoryCode;
+  String? _highlightSubcategoryCode;
+  Timer? _clearHighlightTimer;
+  final ScrollController _categoryListScrollController = ScrollController();
 
-  @override
-  void initState() {
-    super.initState();
-    _loadGeneralCategories();
+  String _normalizeForSearch(String input) {
+    final lower = input.trim().toLowerCase();
+    final noSpace = lower.replaceAll(RegExp(r'[\\s\\u00A0]+'), '');
+    return noSpace.replaceAll(RegExp(r'[^a-z0-9]'), '');
   }
 
-  @override
-  void dispose() {
-    _searchController.dispose();
-    super.dispose();
-  }
-
-  Future<void> _loadGeneralCategories() async {
-    try {
-      setState(() {
-        _isLoading = true;
-      });
-
-      QuerySnapshot querySnapshot = await FirebaseFirestore.instance
-          .collection('general_categories')
-          .get();
-
-      List<GeneralCategory> categories = querySnapshot.docs
-          .map((doc) => GeneralCategory.fromFirestore(doc))
-          .toList();
-
-      // Sort categories alphabetically by category name
-      categories.sort(
-        (a, b) => a.categoryName.toLowerCase().compareTo(
-          b.categoryName.toLowerCase(),
-        ),
-      );
-
-      // Sort subcategories alphabetically within each category
-      for (var category in categories) {
-        category.subcategories.sort(
-          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-        );
-      }
-
-      setState(() {
-        _categories = categories;
-        _filteredCategories = categories;
-        _isLoading = false;
-      });
-    } catch (e) {
-      debugPrint('Error loading categories: $e');
-      setState(() {
-        _isLoading = false;
-      });
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading categories: $e')));
-      }
-    }
-  }
-
-  void _performSearch(String query) {
-    final q = query.trim().toLowerCase();
-    if (q.isEmpty) {
-      setState(() {
-        _filteredCategories = _categories;
-        _isSearching = false;
-      });
-      return;
-    }
-
+  /// Builds the filtered list for a non-empty normalized query (same rules as search UI).
+  List<GeneralCategory> _filterCategoriesByNormalizedQuery(
+    List<GeneralCategory> source,
+    String q,
+  ) {
     final List<GeneralCategory> results = [];
 
-    for (final category in _categories) {
-      final catName = category.categoryName.toLowerCase();
-      final catCode = category.code.toLowerCase();
+    for (final category in source) {
+      final catName = _normalizeForSearch(category.categoryName);
+      final catCode = _normalizeForSearch(category.code);
 
       final matchesCategory = catName.contains(q) || catCode.contains(q);
 
       final matchingSubs = category.subcategories.where((sub) {
-        final name = sub.name.toLowerCase();
-        final code = sub.code.toLowerCase();
-        final hsn = (sub.hsnCode ?? '').toLowerCase();
-        final desc = (sub.description ?? '').toLowerCase();
+        final name = _normalizeForSearch(sub.name);
+        final code = _normalizeForSearch(sub.code);
+        final hsn = _normalizeForSearch(sub.hsnCode ?? '');
+        final desc = _normalizeForSearch(sub.description ?? '');
         return name.contains(q) ||
             code.contains(q) ||
             hsn.contains(q) ||
@@ -133,8 +81,152 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
       }
     }
 
+    return results;
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _loadGeneralCategories();
+  }
+
+  @override
+  void dispose() {
+    _clearHighlightTimer?.cancel();
+    _categoryListScrollController.dispose();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  void _scheduleClearReturnHighlight() {
+    _clearHighlightTimer?.cancel();
+    _clearHighlightTimer = Timer(const Duration(seconds: 5), () {
+      if (!mounted) return;
+      setState(() {
+        _highlightCategoryCode = null;
+        _highlightSubcategoryCode = null;
+      });
+    });
+  }
+
+  static String _normCatCode(String? s) => (s ?? '').trim();
+
+  static String _normSubCode(String? s) => (s ?? '').trim().toLowerCase();
+
+  Future<void> _loadGeneralCategories({
+    String? expandCategoryCode,
+    String? highlightCategoryCode,
+    String? highlightSubcategoryCode,
+    double? restoreScrollOffset,
+  }) async {
+    try {
+      setState(() {
+        _isLoading = true;
+      });
+
+      QuerySnapshot querySnapshot = await FirebaseFirestore.instance
+          .collection('general_categories')
+          .get();
+
+      List<GeneralCategory> categories = querySnapshot.docs
+          .map((doc) => GeneralCategory.fromFirestore(doc))
+          .toList();
+
+      // Sort categories alphabetically by category name
+      categories.sort(
+        (a, b) => a.categoryName.toLowerCase().compareTo(
+          b.categoryName.toLowerCase(),
+        ),
+      );
+
+      // Sort subcategories alphabetically within each category
+      for (var category in categories) {
+        category.subcategories.sort(
+          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+        );
+      }
+
+      final expandNorm = _normCatCode(expandCategoryCode);
+      final highlightCatNorm = _normCatCode(highlightCategoryCode);
+      final highlightSubNorm = highlightSubcategoryCode == null
+          ? ''
+          : _normSubCode(highlightSubcategoryCode);
+
+      final searchQ = _normalizeForSearch(_searchController.text);
+
+      setState(() {
+        _categories = categories;
+        if (expandNorm.isNotEmpty) {
+          for (final c in _categories) {
+            c.isExpanded = _normCatCode(c.code) == expandNorm;
+          }
+        }
+        if (searchQ.isEmpty) {
+          _filteredCategories = categories;
+          _isSearching = false;
+        } else {
+          _filteredCategories =
+              _filterCategoriesByNormalizedQuery(categories, searchQ);
+          _isSearching = true;
+        }
+        _isLoading = false;
+        _highlightCategoryCode =
+            highlightCatNorm.isEmpty ? null : highlightCatNorm;
+        _highlightSubcategoryCode =
+            highlightSubNorm.isEmpty ? null : highlightSubNorm;
+      });
+
+      if (highlightSubNorm.isNotEmpty || restoreScrollOffset != null) {
+        WidgetsBinding.instance.addPostFrameCallback((_) {
+          if (!mounted) return;
+          if (highlightSubNorm.isNotEmpty) {
+            setState(() {});
+          }
+          void applyScroll() {
+            if (!mounted ||
+                restoreScrollOffset == null ||
+                !_categoryListScrollController.hasClients) {
+              return;
+            }
+            final maxScroll =
+                _categoryListScrollController.position.maxScrollExtent;
+            final target = restoreScrollOffset.clamp(0.0, maxScroll);
+            _categoryListScrollController.jumpTo(target);
+          }
+
+          applyScroll();
+          if (restoreScrollOffset != null) {
+            WidgetsBinding.instance.addPostFrameCallback((_) {
+              applyScroll();
+            });
+          }
+        });
+      }
+    } catch (e) {
+      debugPrint('Error loading categories: $e');
+      setState(() {
+        _isLoading = false;
+      });
+      if (mounted) {
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Error loading categories: $e')));
+      }
+    }
+  }
+
+  void _performSearch(String query) {
+    final q = _normalizeForSearch(query);
+    if (q.isEmpty) {
+      setState(() {
+        _filteredCategories = _categories;
+        _isSearching = false;
+      });
+      return;
+    }
+
     setState(() {
-      _filteredCategories = results;
+      _filteredCategories = _filterCategoriesByNormalizedQuery(_categories, q);
       _isSearching = true;
     });
   }
@@ -161,6 +253,11 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     });
   }
 
+  double _categoryListScrollOffsetOrZero() {
+    if (!_categoryListScrollController.hasClients) return 0;
+    return _categoryListScrollController.offset;
+  }
+
   Future<void> _navigateToAddSubcategory(int index) async {
     final category = _filteredCategories[index];
     // Find the original category to get all subcategories
@@ -168,6 +265,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
       (c) => c.code == category.code,
       orElse: () => category,
     );
+    final savedScroll = _categoryListScrollOffsetOrZero();
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -180,8 +278,28 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     );
 
     if (result != null && result is List<SubCategory>) {
-      // Reload categories to reflect changes
-      _loadGeneralCategories();
+      final updated = result;
+      final beforeCodes = originalCategory.subcategories
+          .map((e) => e.code.trim())
+          .toSet();
+      String? newSubCode;
+      for (final s in updated) {
+        final c = s.code.trim();
+        if (c.isNotEmpty && !beforeCodes.contains(c)) {
+          newSubCode = c;
+          break;
+        }
+      }
+      await _loadGeneralCategories(
+        expandCategoryCode: originalCategory.code,
+        highlightCategoryCode:
+            newSubCode != null ? originalCategory.code : null,
+        highlightSubcategoryCode: newSubCode,
+        restoreScrollOffset: savedScroll,
+      );
+      if (newSubCode != null) {
+        _scheduleClearReturnHighlight();
+      }
     }
   }
 
@@ -204,6 +322,10 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
       orElse: () => subcategory,
     );
 
+    final catCode = originalCategory.code;
+    final subCode = originalSubcategory.code.trim();
+    final savedScroll = _categoryListScrollOffsetOrZero();
+
     final result = await Navigator.push(
       context,
       MaterialPageRoute(
@@ -218,8 +340,15 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     );
 
     if (result != null && result is List<SubCategory>) {
-      // Reload categories to reflect changes
-      _loadGeneralCategories();
+      await _loadGeneralCategories(
+        expandCategoryCode: catCode,
+        highlightCategoryCode: catCode,
+        highlightSubcategoryCode: subCode.isNotEmpty ? subCode : null,
+        restoreScrollOffset: savedScroll,
+      );
+      if (subCode.isNotEmpty) {
+        _scheduleClearReturnHighlight();
+      }
     }
   }
 
@@ -423,7 +552,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     final nameController = TextEditingController();
     final codeController = TextEditingController();
     final hsnCodeController = TextEditingController();
-    final unitController = TextEditingController(text: 'Piece');
+    final unitController = TextEditingController(text: 'Number');
     final gstRateController = TextEditingController();
 
     await showDialog(
@@ -494,10 +623,28 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                   return;
                 }
 
+                final newCode = codeController.text.trim();
+                if (category.subcategories.any(
+                  (s) => s.code.trim() == newCode,
+                )) {
+                  final existing = category.subcategories.firstWhere(
+                    (s) => s.code.trim() == newCode,
+                  );
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Code "$newCode" is already used by "${existing.name}". '
+                        'Use a unique code so an existing subcategory is not replaced.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
                 // Create new subcategory
                 SubCategory newSubcategory = SubCategory(
                   name: nameController.text,
-                  code: codeController.text,
+                  code: newCode,
                   attributes: '',
                   attributeTypes: '',
                   hsnCode: hsnCodeController.text.isEmpty
@@ -545,6 +692,36 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
 
   Future<void> _updateCategoryInFirestore(GeneralCategory category) async {
     try {
+      final seenCodes = <String>{};
+      for (final sub in category.subcategories) {
+        final c = sub.code.trim();
+        if (c.isEmpty) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(
+                content: Text(
+                  'Subcategory codes cannot be empty. Fix duplicates or blank codes before saving.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+        if (seenCodes.contains(c)) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(
+                content: Text(
+                  'Duplicate subcategory code "$c". Each subcategory must have a unique code.',
+                ),
+              ),
+            );
+          }
+          return;
+        }
+        seenCodes.add(c);
+      }
+
       // Convert subcategories to JSON
       List<Map<String, dynamic>> subcategoriesJson = category.subcategories.map(
         (sub) {
@@ -964,6 +1141,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                 const SizedBox(height: 4),
                 Expanded(
                   child: ListView.builder(
+                    controller: _categoryListScrollController,
                     padding: const EdgeInsets.symmetric(horizontal: 16),
                     itemCount: _filteredCategories.length,
                     itemBuilder: (context, index) {
@@ -980,6 +1158,10 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
 
   Widget _buildCategoryCard(int index) {
     final category = _filteredCategories[index];
+    final groupHighlighted =
+        _normCatCode(_highlightCategoryCode) == _normCatCode(category.code) &&
+            (_highlightSubcategoryCode != null &&
+                _highlightSubcategoryCode!.isNotEmpty);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -991,10 +1173,18 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
           Container(
             padding: const EdgeInsets.all(12),
             decoration: BoxDecoration(
-              color: AppColors.primaryGreen.withOpacity(0.1),
+              color: groupHighlighted
+                  ? AppColors.primaryGreen.withOpacity(0.22)
+                  : AppColors.primaryGreen.withOpacity(0.1),
               borderRadius: const BorderRadius.vertical(
                 top: Radius.circular(12),
               ),
+              border: groupHighlighted
+                  ? Border.all(
+                      color: AppColors.primaryGreen.withOpacity(0.65),
+                      width: 1.5,
+                    )
+                  : null,
             ),
             child: Row(
               children: [
@@ -1058,69 +1248,148 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
             const Divider(height: 1),
             Container(
               constraints: const BoxConstraints(maxHeight: 300),
+              decoration: groupHighlighted
+                  ? BoxDecoration(
+                      color: AppColors.primaryGreen.withOpacity(0.07),
+                    )
+                  : null,
               child: ListView.builder(
                 shrinkWrap: true,
                 physics: const ClampingScrollPhysics(),
                 itemCount: category.subcategories.length,
                 itemBuilder: (context, subIndex) {
                   SubCategory subcategory = category.subcategories[subIndex];
-                  return ListTile(
-                    dense: true,
-                    title: Text(
-                      subcategory.name,
-                      style: const TextStyle(fontSize: 13),
+                  final pinRow = groupHighlighted &&
+                      _normSubCode(subcategory.code) ==
+                          _normSubCode(_highlightSubcategoryCode);
+                  return _HoverSubcategoryRow(
+                    key: ValueKey(
+                      '${_normCatCode(category.code)}::${_normSubCode(subcategory.code)}',
                     ),
-                    subtitle: Text(
-                      [
-                        if ((subcategory.hsnCode ?? '').isNotEmpty)
-                          'HSN: ${subcategory.hsnCode}',
-                        'Unit: ${subcategory.unit ?? 'Piece'}',
-                        if (subcategory.gstRate != null)
-                          'GST: ${subcategory.gstRate}%',
-                      ].join(' • '),
-                      style: TextStyle(
-                        fontSize: 11,
-                        color: AppColors.primaryGrey,
+                    pinnedHighlight: pinRow,
+                    child: ListTile(
+                      dense: true,
+                      onTap: ADD_GEN_CAT
+                          ? () =>
+                              _navigateToEditSubcategory(index, subIndex)
+                          : null,
+                      title: Text(
+                        subcategory.name,
+                        style: const TextStyle(fontSize: 13),
                       ),
+                      subtitle: Text(
+                        [
+                          if (subcategory.code.trim().isNotEmpty)
+                            'Code: ${subcategory.code.trim()}',
+                          if ((subcategory.hsnCode ?? '').isNotEmpty)
+                            'HSN: ${subcategory.hsnCode}',
+                          'Unit: ${subcategory.unit ?? 'Piece'}',
+                          if (subcategory.gstRate != null)
+                            'GST: ${subcategory.gstRate}%',
+                        ].join(' • '),
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: AppColors.primaryGrey,
+                        ),
+                      ),
+                      trailing: ADD_GEN_CAT
+                          ? IconButton(
+                              icon: const Icon(
+                                Icons.delete_outline,
+                                color: Colors.red,
+                                size: 18,
+                              ),
+                              onPressed: () =>
+                                  _deleteSubcategory(index, subIndex),
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(),
+                              tooltip: 'Delete Subcategory',
+                            )
+                          : null,
                     ),
-                    trailing: ADD_GEN_CAT
-                        ? Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              IconButton(
-                                icon: Icon(
-                                  Icons.edit_outlined,
-                                  color: AppColors.primaryGreen,
-                                  size: 18,
-                                ),
-                                onPressed: () =>
-                                    _navigateToEditSubcategory(index, subIndex),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                tooltip: 'Edit Subcategory',
-                              ),
-                              const SizedBox(width: 14),
-                              IconButton(
-                                icon: const Icon(
-                                  Icons.delete_outline,
-                                  color: Colors.red,
-                                  size: 18,
-                                ),
-                                onPressed: () =>
-                                    _deleteSubcategory(index, subIndex),
-                                padding: EdgeInsets.zero,
-                                constraints: const BoxConstraints(),
-                                tooltip: 'Delete Subcategory',
-                              ),
-                            ],
-                          )
-                        : null,
                   );
                 },
               ),
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+/// Full-width row hover highlight for web / desktop (mouse); no-op on touch.
+/// [pinnedHighlight] is used after save to mark the row the user just edited.
+class _HoverSubcategoryRow extends StatefulWidget {
+  const _HoverSubcategoryRow({
+    super.key,
+    required this.child,
+    this.pinnedHighlight = false,
+  });
+
+  final Widget child;
+  final bool pinnedHighlight;
+
+  @override
+  State<_HoverSubcategoryRow> createState() => _HoverSubcategoryRowState();
+}
+
+class _HoverSubcategoryRowState extends State<_HoverSubcategoryRow> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final pin = widget.pinnedHighlight;
+    final h = _hover;
+
+    final Color bg;
+    if (pin && h) {
+      bg = AppColors.primaryGreen.withOpacity(0.42);
+    } else if (pin) {
+      bg = AppColors.primaryGreen.withOpacity(0.30);
+    } else if (h) {
+      bg = AppColors.primaryGreen.withOpacity(0.20);
+    } else {
+      bg = Colors.transparent;
+    }
+
+    final Border border;
+    if (pin) {
+      border = Border.all(
+        color: AppColors.primaryGreen.withOpacity(0.95),
+        width: 2.5,
+      );
+    } else if (h) {
+      border = Border.all(
+        color: AppColors.primaryGreen.withOpacity(0.55),
+        width: 1.5,
+      );
+    } else {
+      border = Border.all(color: Colors.transparent, width: 2.5);
+    }
+
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeOut,
+        width: double.infinity,
+        decoration: BoxDecoration(
+          color: bg,
+          borderRadius: BorderRadius.circular(8),
+          border: border,
+          boxShadow: pin || h
+              ? [
+                  BoxShadow(
+                    color: AppColors.primaryGreen.withOpacity(pin ? 0.35 : 0.2),
+                    blurRadius: pin ? 12 : 8,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
+        ),
+        child: widget.child,
       ),
     );
   }

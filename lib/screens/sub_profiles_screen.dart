@@ -347,6 +347,87 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
     return _activatingProfileId == profileId;
   }
 
+  Future<void> _updateSubProfileStatus(
+    SubProfileModel profile,
+    String newStatus,
+  ) async {
+    if (newStatus == profile.status) return;
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Update Status'),
+        content: Text(
+          'Do you want to change status to ${newStatus == 'active' ? 'Active' : 'Inactive'} for "${profile.name}"?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.of(context).pop(true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+              foregroundColor: Colors.white,
+            ),
+            child: const Text('Update'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    try {
+      final user = _auth.currentUser;
+      final userId = widget.userId.isNotEmpty ? widget.userId : user?.uid;
+      if (userId == null || userId.isEmpty) {
+        showSnackbar(
+          context,
+          'User not authenticated',
+          backgroundColor: Colors.red,
+        );
+        return;
+      }
+
+      if (newStatus == 'active') {
+        await _activateSubProfile(profile);
+      } else {
+        await _firestore
+            .collection('users')
+            .doc(userId)
+            .collection('subProfiles')
+            .doc(profile.id)
+            .update({'status': 'inactive', 'updatedAt': DateTime.now()});
+
+        if (ACTIVE_PROFILE_ID == profile.id) {
+          ACTIVE_PROFILE_ID = '';
+          ACTIVE_PROFILE_PREFIX = '';
+          ACTIVE_PROFILE_NAME = '';
+          ACTIVE_PROFILE_CODE = '';
+          IS_SUB_PROFILE = false;
+        }
+
+        await _loadSubProfiles();
+        if (mounted) {
+          showSnackbar(
+            context,
+            'Profile status updated to inactive',
+            backgroundColor: Colors.green,
+          );
+        }
+      }
+    } catch (e) {
+      await logErrorToFile(e.toString(), StackTrace.current);
+      if (mounted) {
+        showSnackbar(
+          context,
+          'Failed to update profile status: $e',
+          backgroundColor: Colors.red,
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -493,6 +574,11 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
                                     await _activateSubProfile(profile);
                                   }
                                 },
+                                onStatusChanged: (newStatus) =>
+                                    _updateSubProfileStatus(
+                                      profile,
+                                      newStatus,
+                                    ),
                               ),
                             ),
                           );
@@ -514,6 +600,7 @@ class SubProfileCard extends StatefulWidget {
   final bool canActivate;
   final bool isActivating;
   final VoidCallback onActivate;
+  final Future<void> Function(String newStatus)? onStatusChanged;
 
   const SubProfileCard({
     super.key,
@@ -521,6 +608,7 @@ class SubProfileCard extends StatefulWidget {
     required this.canActivate,
     required this.isActivating,
     required this.onActivate,
+    this.onStatusChanged,
   });
 
   @override
@@ -529,6 +617,7 @@ class SubProfileCard extends StatefulWidget {
 
 class _SubProfileCardState extends State<SubProfileCard> {
   bool isUpdatingPermission = false;
+  bool _isUpdatingStatus = false;
   bool _permissionsExpanded = false;
   final Map<String, bool> _enabled = {
     'Bills': false,
@@ -652,6 +741,88 @@ class _SubProfileCardState extends State<SubProfileCard> {
     return '${date.day}/${date.month}/${date.year} ${date.hour}:${date.minute.toString().padLeft(2, '0')}';
   }
 
+  Future<void> _handleStatusChange(String newStatus) async {
+    if (_isUpdatingStatus ||
+        widget.onStatusChanged == null ||
+        newStatus == widget.profile.status) {
+      return;
+    }
+    setState(() {
+      _isUpdatingStatus = true;
+    });
+    try {
+      await widget.onStatusChanged!(newStatus);
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isUpdatingStatus = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _openStatusChangeModal() async {
+    if (widget.onStatusChanged == null || _isUpdatingStatus) return;
+    String selectedStatus = widget.profile.status;
+
+    await showDialog<void>(
+      context: context,
+      builder: (context) {
+        return StatefulBuilder(
+          builder: (context, setModalState) {
+            return AlertDialog(
+              title: const Text('Change Status'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('Select status'),
+                  const SizedBox(height: 10),
+                  DropdownButtonFormField<String>(
+                    value: selectedStatus,
+                    isExpanded: true,
+                    items: const [
+                      DropdownMenuItem(value: 'active', child: Text('Active')),
+                      DropdownMenuItem(
+                        value: 'inactive',
+                        child: Text('Inactive'),
+                      ),
+                    ],
+                    onChanged: (value) {
+                      if (value == null) return;
+                      setModalState(() {
+                        selectedStatus = value;
+                      });
+                    },
+                  ),
+                ],
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: selectedStatus == widget.profile.status
+                      ? null
+                      : () async {
+                          Navigator.of(context).pop();
+                          await _handleStatusChange(selectedStatus);
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Update Status'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final profileColor = generateColorFromCode(widget.profile.code);
@@ -759,6 +930,74 @@ class _SubProfileCardState extends State<SubProfileCard> {
                               ),
                             )
                           : Container(),
+                      const SizedBox(height: 6),
+                      Row(
+                        children: [
+                          Text(
+                            'Status:',
+                            style: TextStyle(
+                              fontSize: 13,
+                              color: AppColors.primaryGrey,
+                            ),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 8,
+                              vertical: 2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: widget.profile.status == 'active'
+                                  ? AppColors.activeGreen.withOpacity(0.15)
+                                  : Colors.orange.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Text(
+                              widget.profile.status == 'active'
+                                  ? 'Active'
+                                  : 'Inactive',
+                              style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: widget.profile.status == 'active'
+                                    ? AppColors.activeGreen
+                                    : Colors.orange.shade700,
+                              ),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          if (widget.onStatusChanged != null)
+                            _isUpdatingStatus
+                                ? const SizedBox(
+                                    height: 16,
+                                    width: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                    ),
+                                  )
+                                : OutlinedButton(
+                                    onPressed: _openStatusChangeModal,
+                                    style: OutlinedButton.styleFrom(
+                                      padding: const EdgeInsets.symmetric(
+                                        horizontal: 10,
+                                        vertical: 6,
+                                      ),
+                                      minimumSize: const Size(0, 30),
+                                      side: BorderSide(
+                                        color: AppColors.primaryGreen,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      'Change Status',
+                                      style: TextStyle(
+                                        color: AppColors.primaryGreen,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                      ),
+                                    ),
+                                  ),
+                        ],
+                      ),
                       const SizedBox(height: 2),
                       widget.profile.status == 'inactive'
                           ? Container()

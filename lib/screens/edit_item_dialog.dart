@@ -363,6 +363,8 @@ class _EditItemDialogState extends State<EditItemDialog> {
             ? _descriptionController.text.trim()
             : null,
         attributes: jsonEncode(_selectedAttributes),
+        locationId: widget.item.locationId,
+        subProfileId: widget.item.subProfileId,
         printed: widget.item.printed,
         mapped: widget.item.mapped,
         active: widget.item.active,
