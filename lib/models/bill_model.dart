@@ -36,6 +36,8 @@ class BillModel {
   String additionalInfo;
   List<BillItem>? items;
   DateTime dueDate;
+  /// From `location_id` / `locationId` when present on the bill document.
+  final String? locationId;
   final DateTime createdAt;
   final DateTime updatedAt;
 
@@ -68,6 +70,7 @@ class BillModel {
     required this.lastUpdatedProfile,
     required this.dueDate,
     this.items,
+    this.locationId,
     DateTime? createdAt,
     DateTime? updatedAt,
   }) : createdAt = createdAt ?? DateTime.now(),
@@ -100,6 +103,7 @@ class BillModel {
       'credit_amount': creditAmount,
       'additional_info': jsonEncode(additionalInfo),
       'due_date': dueDate.toIso8601String(),
+      if (locationId != null && locationId!.trim().isNotEmpty) 'location_id': locationId,
       'created_at': createdAt.toIso8601String(),
       'updated_at': updatedAt.toIso8601String(),
     };
@@ -158,6 +162,12 @@ class BillModel {
       dueDate: map.containsKey('due_date') && map['due_date'] != null
           ? DateTime.parse(map['due_date'])
           : DateTime.now(),
+      locationId: () {
+        final v = map['location_id'] ?? map['locationId'];
+        if (v == null) return null;
+        final s = v.toString().trim();
+        return s.isEmpty ? null : s;
+      }(),
       createdAt: DateTime.parse(map['created_at']),
       updatedAt: DateTime.parse(map['updated_at']),
       items: [],
@@ -222,6 +232,12 @@ class BillModel {
                 : data['additional_info'].toString())
           : '',
       dueDate: _parseTimestamp(data['due_date'], DateTime.now()),
+      locationId: () {
+        final loc = data['location_id'] ?? data['locationId'];
+        if (loc == null) return null;
+        final s = loc.toString().trim();
+        return s.isEmpty ? null : s;
+      }(),
       createdAt: _parseTimestamp(data['created_at'], DateTime.now()),
       updatedAt: _parseTimestamp(data['updated_at'], DateTime.now()),
       items: _parseItems(data['items']),

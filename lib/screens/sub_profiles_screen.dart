@@ -627,6 +627,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Discounts': false,
     'Credits & Payments': false,
     'Service History': false,
+    'Dashboard': false,
     'Button': false,
   };
   final Map<String, bool> _itemsOptions = {
@@ -645,6 +646,12 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'View sales report': false,
     'View invoice report': false,
     'View inventory report': false,
+  };
+  final Map<String, bool> _dashBoardOptions = {
+    'Revenue Summary': false,
+    'Revenue Total Only': false,
+    'Bill Summary': false,
+    'Item Summary': false,
   };
 
   @override
@@ -671,6 +678,10 @@ class _SubProfileCardState extends State<SubProfileCard> {
       final items = (data['itemsOptions'] as Map?)?.cast<String, dynamic>();
       final cats = (data['categoriesOptions'] as Map?)?.cast<String, dynamic>();
       final reps = (data['reportsOptions'] as Map?)?.cast<String, dynamic>();
+      final dashboardOptions =
+          (data['dashBoardOptions'] as Map?)?.cast<String, dynamic>();
+      final legacyRevenueOptions =
+          (data['revenueSummaryOptions'] as Map?)?.cast<String, dynamic>();
 
       if (mounted) {
         setState(() {
@@ -678,6 +689,10 @@ class _SubProfileCardState extends State<SubProfileCard> {
             perms.forEach((k, v) {
               if (_enabled.containsKey(k)) _enabled[k] = (v == true);
             });
+            if (_enabled['Dashboard'] != true &&
+                perms.containsKey('Revenue Summary')) {
+              _enabled['Dashboard'] = perms['Revenue Summary'] == true;
+            }
           }
           if (items != null) {
             items.forEach((k, v) {
@@ -694,6 +709,14 @@ class _SubProfileCardState extends State<SubProfileCard> {
             reps.forEach((k, v) {
               if (_reportsOptions.containsKey(k))
                 _reportsOptions[k] = (v == true);
+            });
+          }
+          final optionSource = dashboardOptions ?? legacyRevenueOptions;
+          if (optionSource != null) {
+            optionSource.forEach((k, v) {
+              if (_dashBoardOptions.containsKey(k)) {
+                _dashBoardOptions[k] = (v == true);
+              }
             });
           }
         });
@@ -715,6 +738,8 @@ class _SubProfileCardState extends State<SubProfileCard> {
       (val) => val == true,
     );
     _enabled['Reports'] = _reportsOptions.values.any((val) => val == true);
+    _enabled['Dashboard'] =
+        _dashBoardOptions.values.any((val) => val == true);
     final docRef = FirebaseFirestore.instance
         .collection('users')
         .doc(user.uid)
@@ -726,6 +751,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
         'itemsOptions': _itemsOptions,
         'categoriesOptions': _categoriesOptions,
         'reportsOptions': _reportsOptions,
+        'dashBoardOptions': _dashBoardOptions,
       }, SetOptions(merge: true));
     } catch (e) {
       debugPrint('Failed saving subprofile permissions: $e');
@@ -1165,6 +1191,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                     if (key != 'Items' &&
                                         key != 'Categories' &&
                                         key != 'Reports' &&
+                                        key != 'Dashboard' &&
                                         key != 'Button')
                                       CheckboxListTile(
                                         dense: true,
@@ -1312,6 +1339,51 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                                 onChanged: (v) {
                                                   setState(() {
                                                     _reportsOptions[sub] =
+                                                        v ?? false;
+                                                  });
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      )
+                                    else if (key == 'Dashboard')
+                                      Theme(
+                                        data: Theme.of(context).copyWith(
+                                          dividerColor: Colors.transparent,
+                                        ),
+                                        child: ExpansionTile(
+                                          tilePadding: const EdgeInsets.only(
+                                            right: 8,
+                                            left: 0,
+                                          ),
+                                          title: const Row(
+                                            children: [
+                                              Text(
+                                                'Dashboard',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          childrenPadding:
+                                              const EdgeInsets.only(
+                                                left: 8,
+                                                right: 0,
+                                                bottom: 0,
+                                              ),
+                                          children: [
+                                            for (final sub
+                                                in _dashBoardOptions.keys)
+                                              CheckboxListTile(
+                                                dense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                                title: Text(sub),
+                                                value: _dashBoardOptions[sub],
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    _dashBoardOptions[sub] =
                                                         v ?? false;
                                                   });
                                                 },
