@@ -217,7 +217,7 @@ List<Map<String, dynamic>> TAX_SLABS = [];
 
 enum GstType { regular, composite, unregistered, saleReturn }
 
-enum PaymentModes { cash, credit, card, upi, wallet, cheque }
+enum PaymentModes { cash, credit, card, upi, wallet, cheque, multiPay }
 
 enum AttributeFieldType {
   singleSelect(1),

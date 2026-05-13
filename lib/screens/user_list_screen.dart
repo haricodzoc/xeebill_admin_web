@@ -7,19 +7,21 @@ import '../models/user_model.dart';
 import 'bills_screen.dart';
 import 'categories_screen.dart';
 import 'items_screen.dart';
+import 'revenue_summary_screen.dart';
 import 'sub_profiles_screen.dart';
 import 'reports_screen.dart';
 import 'credit_payments_screen.dart';
 import 'user_locations_screen.dart';
+import 'user_customers_screen.dart';
 
-class CustomersScreen extends StatefulWidget {
-  const CustomersScreen({super.key});
+class UserListScreen extends StatefulWidget {
+  const UserListScreen({super.key});
 
   @override
-  State<CustomersScreen> createState() => _CustomersScreenState();
+  State<UserListScreen> createState() => _UserListScreenState();
 }
 
-class _CustomersScreenState extends State<CustomersScreen> {
+class _UserListScreenState extends State<UserListScreen> {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final FirebaseAuth _auth = FirebaseAuth.instance;
   bool _isLoading = true;
@@ -264,7 +266,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
       if (userRole != 'ADMIN') {
         setState(() {
           _errorMessage =
-              'Access denied. Admin role required to view customers.';
+              'Access denied. Admin role required to view users.';
           _isLoading = false;
           _isCheckingAdmin = false;
           _isAdmin = false;
@@ -379,7 +381,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Customers'),
+            const Text('Users'),
             if (!_isLoading && _users.isNotEmpty)
               Text(
                 '${_filteredUsers.length} user${_filteredUsers.length == 1 ? '' : 's'}',
@@ -823,6 +825,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
                       ),
                       _buildActionButton(
                         context,
+                        'Customers',
+                        Icons.groups_2_outlined,
+                        Colors.cyan,
+                        () => _navigateToCustomers(context, user),
+                      ),
+                      _buildActionButton(
+                        context,
                         'Categories',
                         Icons.category,
                         Colors.green,
@@ -834,6 +843,13 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         Icons.inventory_2,
                         Colors.orange,
                         () => _navigateToItems(context, user),
+                      ),
+                      _buildActionButton(
+                        context,
+                        'Revenue Summary',
+                        Icons.insights_outlined,
+                        Colors.deepOrange,
+                        () => _navigateToRevenueSummary(context, user),
                       ),
                       _buildActionButton(
                         context,
@@ -922,6 +938,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
     );
   }
 
+  void _navigateToCustomers(BuildContext context, UserModel user) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => UserCustomersScreen(user: user),
+      ),
+    );
+  }
+
   void _navigateToCategories(BuildContext context, UserModel user) {
     Navigator.push(
       context,
@@ -936,6 +961,15 @@ class _CustomersScreenState extends State<CustomersScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => ItemsScreen(userId: user.userId ?? ''),
+      ),
+    );
+  }
+
+  void _navigateToRevenueSummary(BuildContext context, UserModel user) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => RevenueSummaryScreen(userId: user.userId ?? ''),
       ),
     );
   }
@@ -1158,7 +1192,7 @@ class _CustomersScreenState extends State<CustomersScreen> {
                         itemsController,
                       ),
                       buildNumberField(
-                        'Additional Customers Allowed',
+                        'Additional Users Allowed',
                         customersController,
                       ),
                       buildNumberField(

@@ -4,6 +4,7 @@ class PaymentInfoModel {
   int? id;
   final bool isCredit;
   final bool isBillCompleted;
+  final int settled;
   final String customerCode;
   final String remarks;
   final String paymentId;
@@ -18,6 +19,7 @@ class PaymentInfoModel {
     required this.dueDate,
     required this.isCredit,
     required this.isBillCompleted,
+    this.settled = 0,
     required this.customerCode,
     required this.remarks,
     required this.paymentId,
@@ -36,25 +38,38 @@ class PaymentInfoModel {
       'remarks': remarks,
       'actual_amount': actualAmount,
       'due_amount': dueAmount,
+      'settled': settled,
       'created_at': Timestamp.fromDate(createdAt),
       'customer_code': customerCode,
       'due_date': Timestamp.fromDate(dueDate),
     };
   }
 
-  static fromMap(Map<String, dynamic> map) {
+  static DateTime _parseDate(dynamic v, DateTime fallback) {
+    if (v == null) return fallback;
+    if (v is Timestamp) return v.toDate();
+    if (v is String) {
+      final d = DateTime.tryParse(v);
+      if (d != null) return d;
+    }
+    if (v is int) return DateTime.fromMillisecondsSinceEpoch(v);
+    return fallback;
+  }
+
+  factory PaymentInfoModel.fromMap(Map<String, dynamic> map) {
     return PaymentInfoModel(
-      id: map['id'] ?? 0,
-      isCredit: map['is_credit'] ?? false,
+      id: map['id'] is int ? map['id'] as int? : int.tryParse(map['id']?.toString() ?? ''),
+      isCredit: map['is_credit'] == true || map['is_credit'] == 1,
       isBillCompleted: true,
-      paymentId: map['payment_id'] ?? '',
-      remarks: map['remarks'] ?? '',
-      totalAmount: (map['total_amount'] ?? 0).toDouble(),
-      actualAmount: (map['actual_amount'] ?? 0).toDouble(),
-      dueAmount: (map['due_amount'] ?? 0).toDouble(),
-      createdAt: (map['created_at'] as Timestamp).toDate(),
-      customerCode: map['customer_code'] ?? '',
-      dueDate: (map['due_date'] as Timestamp).toDate(),
+      settled: (map['settled'] as num?)?.toInt() ?? 0,
+      paymentId: map['payment_id']?.toString() ?? '',
+      remarks: map['remarks']?.toString() ?? '',
+      totalAmount: (map['total_amount'] as num?)?.toDouble() ?? 0.0,
+      actualAmount: (map['actual_amount'] as num?)?.toDouble() ?? 0.0,
+      dueAmount: (map['due_amount'] as num?)?.toDouble() ?? 0.0,
+      createdAt: _parseDate(map['created_at'], DateTime.now()),
+      customerCode: map['customer_code']?.toString() ?? '',
+      dueDate: _parseDate(map['due_date'], DateTime.now()),
     );
   }
 }

@@ -216,8 +216,14 @@ class BillModel {
       returnTotal: (data['return_total'] as num?)?.toDouble() ?? 0.0,
       netPayable: (data['net_payable'] as num?)?.toDouble() ?? 0.0,
       completed: data['completed'] == true || data['completed'] == 1,
-      billDate: _parseTimestamp(data['bill_date'], DateTime.now()),
-      billTime: _parseTimestamp(data['bill_time'], DateTime.now()),
+      billDate: _parseTimestamp(
+        data['bill_date'] ?? data['billDate'],
+        DateTime.now(),
+      ),
+      billTime: _parseTimestamp(
+        data['bill_time'] ?? data['billTime'],
+        DateTime.now(),
+      ),
       profileId: data['profile_id'] as String? ?? '',
       profileCode: data['profile_code'] as String? ?? '',
       lastUpdatedProfile: data['last_updated_profile'] as String? ?? '',

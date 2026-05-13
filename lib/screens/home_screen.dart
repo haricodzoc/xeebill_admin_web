@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
-import 'customers_screen.dart';
+import 'user_list_screen.dart';
 import 'general_category_screen.dart';
 import 'settings_screen.dart';
 import 'recharge_plans_screen.dart';
@@ -108,76 +108,85 @@ class HomeScreen extends StatelessWidget {
                 ).textTheme.titleLarge?.copyWith(fontWeight: FontWeight.bold),
               ),
               const SizedBox(height: 16),
-              GridView.count(
-                crossAxisCount: 2,
-                shrinkWrap: true,
-                physics: const NeverScrollableScrollPhysics(),
-                crossAxisSpacing: 16,
-                mainAxisSpacing: 16,
-                childAspectRatio: 1.5,
-                children: [
-                  _buildActionCard(
-                    context,
-                    icon: Icons.person,
-                    title: 'Customers',
-                    subtitle: 'Manage customers',
-                    color: Colors.green,
-                    onTap: () {
-                      Navigator.push(
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final w = constraints.maxWidth;
+                  final crossAxisCount = w < 520 ? 1 : 2;
+                  // Taller tiles on narrow / 2-col layouts so title + subtitle fit without overflow.
+                  final childAspectRatio = crossAxisCount == 1
+                      ? (w < 360 ? 2.0 : 2.35)
+                      : (w < 640 ? 0.95 : 1.35);
+                  return GridView.count(
+                    crossAxisCount: crossAxisCount,
+                    shrinkWrap: true,
+                    physics: const NeverScrollableScrollPhysics(),
+                    crossAxisSpacing: 16,
+                    mainAxisSpacing: 16,
+                    childAspectRatio: childAspectRatio,
+                    children: [
+                      _buildActionCard(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => const CustomersScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildActionCard(
-                    context,
-                    icon: Icons.analytics,
-                    title: 'General Categories',
-                    subtitle: 'View general categories',
-                    color: Colors.orange,
-                    onTap: () {
-                      // TODO: Navigate to reports screen
-                      Navigator.push(
+                        icon: Icons.person,
+                        title: 'Users',
+                        subtitle: 'Manage users',
+                        color: Colors.green,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const UserListScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildActionCard(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => GeneralCategoryScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildActionCard(
-                    context,
-                    icon: Icons.settings,
-                    title: 'Settings',
-                    subtitle: 'App settings',
-                    color: Colors.purple,
-                    onTap: () {
-                      Navigator.push(
+                        icon: Icons.analytics,
+                        title: 'General Categories',
+                        subtitle: 'View general categories',
+                        color: Colors.orange,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => GeneralCategoryScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildActionCard(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => const SettingsScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                  _buildActionCard(
-                    context,
-                    icon: Icons.phone_android,
-                    title: 'Recharge Plans',
-                    subtitle: 'Manage recharge plans',
-                    color: Colors.teal,
-                    onTap: () {
-                      Navigator.push(
+                        icon: Icons.settings,
+                        title: 'Settings',
+                        subtitle: 'App settings',
+                        color: Colors.purple,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const SettingsScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildActionCard(
                         context,
-                        MaterialPageRoute(
-                          builder: (context) => const RechargePlansScreen(),
-                        ),
-                      );
-                    },
-                  ),
-                ],
+                        icon: Icons.phone_android,
+                        title: 'Recharge Plans',
+                        subtitle: 'Manage recharge plans',
+                        color: Colors.teal,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const RechargePlansScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  );
+                },
               ),
               const SizedBox(height: 32),
               // Recent Activity Section
@@ -219,6 +228,17 @@ class HomeScreen extends StatelessWidget {
     required Color color,
     required VoidCallback onTap,
   }) {
+    final narrow = MediaQuery.sizeOf(context).width < 520;
+    final iconSize = narrow ? 34.0 : 40.0;
+    final titleStyle = Theme.of(context).textTheme.titleMedium?.copyWith(
+          fontWeight: FontWeight.bold,
+          height: 1.2,
+        );
+    final subtitleStyle = Theme.of(context).textTheme.bodySmall?.copyWith(
+          color: Colors.grey[600],
+          height: 1.25,
+        );
+
     return Card(
       elevation: 2,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
@@ -226,26 +246,33 @@ class HomeScreen extends StatelessWidget {
         onTap: onTap,
         borderRadius: BorderRadius.circular(12),
         child: Padding(
-          padding: const EdgeInsets.all(16.0),
+          padding: EdgeInsets.symmetric(
+            horizontal: narrow ? 12.0 : 16.0,
+            vertical: narrow ? 10.0 : 16.0,
+          ),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 40, color: color),
-              const SizedBox(height: 8),
-              Text(
-                title,
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.bold),
-                textAlign: TextAlign.center,
+              Icon(icon, size: iconSize, color: color),
+              SizedBox(height: narrow ? 6 : 8),
+              Flexible(
+                child: Text(
+                  title,
+                  style: titleStyle,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
-              const SizedBox(height: 4),
-              Text(
-                subtitle,
-                style: Theme.of(
-                  context,
-                ).textTheme.bodySmall?.copyWith(color: Colors.grey[600]),
-                textAlign: TextAlign.center,
+              SizedBox(height: narrow ? 2 : 4),
+              Flexible(
+                child: Text(
+                  subtitle,
+                  style: subtitleStyle,
+                  textAlign: TextAlign.center,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                ),
               ),
             ],
           ),
@@ -254,3 +281,4 @@ class HomeScreen extends StatelessWidget {
     );
   }
 }
+
