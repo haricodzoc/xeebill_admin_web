@@ -90,7 +90,9 @@ class CategoryModel {
 
     return CategoryModel(
       id: data['id'] as int?,
-      code: data['code']?.toString() ?? '',
+      code: (data['code']?.toString().trim().isNotEmpty == true)
+          ? data['code'].toString().trim()
+          : doc.id,
       name: data['name']?.toString() ?? '',
       unit: data['unit']?.toString() ?? '',
       hsnCode: data['hsn_code']?.toString() ?? '',

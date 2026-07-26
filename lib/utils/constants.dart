@@ -10,6 +10,7 @@ String ACTIVE_PROFILE_PREFIX = '1';
 String ACTIVE_PROFILE_NAME = '';
 String ACTIVE_PROFILE_CODE = '';
 bool IS_SUB_PROFILE = false;
+String COPIED_ATTRIBUTE_VALUE = '';
 BuildContext? REFRESH_SYNC_CONTEXT;
 int ITEM_SYNC_BACKWARD_INSTANCE = 1;
 int BILL_SYNC_BACKWARD_INSTANCE = 1;
@@ -84,6 +85,19 @@ List<String> PROFILE_CODES = ['MP'];
 
 String LABEL_SIZE = '38mm * 25mm';
 
+String RECEIPT_SIZE = '2 inch';
+
+/// TSC thermal label printer resolution for TSPL (203 or 300).
+int LABEL_PRINTER_DPI = 203;
+
+/// Print direction for the 70mm × 15mm jewel fold tag (`left` / `right`).
+String JEWEL_TAG_PRINT_DIRECTION = 'left';
+
+const List<String> JEWEL_TAG_PRINT_DIRECTION_OPTIONS = ['left', 'right'];
+
+bool LABEL_TEMPLATE_DEFAULT_ENABLED = true;
+bool LABEL_TEMPLATE_CUSTOM_ENABLED = false;
+
 DateTime? ACCOUNT_EXPIRY_DATE;
 
 bool IS_BILL_SUBSCRIBED = false;
@@ -102,7 +116,34 @@ bool ENABLE_HSN = false;
 
 bool SHOW_TAX_ON_BILL = false;
 
-bool APPLY_ROUND_OFF = false;
+bool APPLY_ROUND_OFF = true;
+
+/// Round-off granularity when [APPLY_ROUND_OFF] is true.
+const String kRoundOffFrequencyDecimal = 'decimal';
+const String kRoundOffFrequencyNearest5 = 'nearest5';
+const String kRoundOffFrequencyNearest10 = 'nearest10';
+String ROUNDOFF_FREQUENCY = kRoundOffFrequencyNearest10;
+
+bool PRICE_MASKING = false;
+
+Map<String, String> MASKED_JSON = {for (int i = 0; i < 10; i++) '$i': '$i'};
+
+bool VOICE_BILLING_ENABLED = false;
+
+bool BARCODE_SCANNING_ENABLED = true;
+bool DIRECT_ITEM_ADDITION_ENABLED = true;
+
+bool DISABLE_BILL_TYPE_CONFIRMATION = false;
+
+bool REPEAT_SCANNING = false;
+
+bool EXTERNAL_SCANNER = false;
+
+bool SCANNED_ITEM_CONFIRMATION = true;
+
+bool FLASH_ON_SCAN = false;
+
+bool ADDITIONAL_QUANTITY_OPTION_ENABLED = false;
 
 bool TAX_TOGGLE = false;
 
@@ -248,3 +289,6 @@ enum AttributeFieldType {
     );
   }
 }
+
+const List<String> RECEIPT_SIZE_OPTIONS = ['2 inch', '3 inch', '4 inch'];
+const String kDefaultReceiptSize = '2 inch';

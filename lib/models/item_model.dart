@@ -11,6 +11,7 @@ class ItemModel {
   final double price;
   final double quantity;
   double availableQty;
+  double archivedQty;
   double? taxPerc;
   double sellPrice;
   final String categoryCode;
@@ -41,6 +42,7 @@ class ItemModel {
     required this.price,
     required this.quantity,
     required this.availableQty,
+    this.archivedQty = 0,
     required this.printed,
     required this.mapped,
     required this.active,
@@ -69,6 +71,7 @@ class ItemModel {
       'sell_price': sellPrice,
       'quantity': quantity,
       'available_qty': availableQty,
+      'archived_qty': archivedQty,
       'printed': printed ? 1 : 0,
       'mapped': mapped ? 1 : 0,
       'category_code': categoryCode,
@@ -100,6 +103,7 @@ class ItemModel {
       sellPrice: map['sell_price'] as double,
       quantity: map['quantity'] as double,
       availableQty: -1,
+      archivedQty: (map['archived_qty'] as num?)?.toDouble() ?? 0,
       printed: (map['printed'] as int) == 1, // Convert int back to bool
       mapped: map['mapped'] != null
           ? (map['mapped'] as int) == 1
@@ -167,6 +171,7 @@ class ItemModel {
       sellPrice: (data['sell_price'] as num?)?.toDouble() ?? 0.0,
       quantity: (data['quantity'] as num?)?.toDouble() ?? 0.0,
       availableQty: (data['available_qty'] as num?)?.toDouble() ?? 0.0,
+      archivedQty: (data['archived_qty'] as num?)?.toDouble() ?? 0.0,
       printed: data['printed'] == true || data['printed'] == 1,
       mapped: data['mapped'] == true || data['mapped'] == 1,
       active: data['active'] != false && data['active'] != 0,

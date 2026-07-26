@@ -173,137 +173,147 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
       ..sort((a, b) => a.toLowerCase().compareTo(b.toLowerCase()));
   }
 
-  Future<void> _updateFirestoreSubcategories(
-    List<SubCategory> updatedSubcategories,
-  ) async {
+  String _sortedAttributesJson(String attributesJson) {
+    if (attributesJson.isEmpty) return attributesJson;
+    try {
+      final attributesMap =
+          jsonDecode(attributesJson) as Map<String, dynamic>;
+      final sortedAttributesMap = <String, dynamic>{};
+      attributesMap.forEach((key, value) {
+        if (value is Map) {
+          final keys = (value as Map<String, dynamic>).keys.toList();
+          final sortedKeys = _smartSort(keys);
+          final sortedValue = <String, dynamic>{};
+          for (final k in sortedKeys) {
+            sortedValue[k] = value[k];
+          }
+          sortedAttributesMap[key] = sortedValue;
+        } else {
+          sortedAttributesMap[key] = value;
+        }
+      });
+      return jsonEncode(sortedAttributesMap);
+    } catch (_) {
+      return attributesJson;
+    }
+  }
+
+  /// Saves one subcategory into `general_sub_categories`
+  /// (document id = code, gen_cat_code = parent general category code).
+  Future<void> _saveSubcategoryToCollection(
+    SubCategory subcategory, {
+    String? previousCode,
+  }) async {
     const int maxRetries = 3;
     int retryCount = 0;
 
     while (retryCount < maxRetries) {
       try {
-        await FirebaseFirestore.instance.runTransaction((transaction) async {
-          QuerySnapshot querySnapshot = await FirebaseFirestore.instance
-              .collection('general_categories')
-              .where('code', isEqualTo: widget.categoryCode)
-              .get();
+        final now = DateTime.now().toIso8601String();
+        final col =
+            FirebaseFirestore.instance.collection('general_sub_categories');
+        final code = subcategory.code.trim();
+        if (code.isEmpty) {
+          throw Exception('Subcategory code cannot be empty');
+        }
 
-          if (querySnapshot.docs.isEmpty) {
-            throw Exception('Category not found in Firestore');
-          }
+        final payload = SubCategory(
+          name: subcategory.name,
+          code: code,
+          attributes: _sortedAttributesJson(subcategory.attributes),
+          attributeTypes: subcategory.attributeTypes,
+          hsnCode: subcategory.hsnCode,
+          unit: subcategory.unit ?? 'Piece',
+          description: subcategory.description ?? '',
+          gstRate: subcategory.gstRate,
+        );
 
-          DocumentReference docRef = querySnapshot.docs.first.reference;
-          DocumentSnapshot currentDoc = await transaction.get(docRef);
-
-          if (!currentDoc.exists) {
-            throw Exception('Document was deleted during the operation');
-          }
-
-          List<dynamic> firestoreSubcategories = [];
-          try {
-            final raw = currentDoc.get('subcategories');
-            if (raw is String) {
-              firestoreSubcategories = jsonDecode(raw);
-            } else if (raw is List) {
-              firestoreSubcategories = raw;
+        final oldCode = (previousCode ?? '').trim();
+        if (oldCode.isNotEmpty && oldCode != code) {
+          final oldRef = col.doc(oldCode);
+          final oldSnap = await oldRef.get();
+          var createdAt = now;
+          var remarks = <String, dynamic>{};
+          if (oldSnap.exists) {
+            final data = oldSnap.data() ?? {};
+            final rawCreated = data['created_at'];
+            if (rawCreated is Timestamp) {
+              createdAt = rawCreated.toDate().toIso8601String();
+            } else if (rawCreated is String && rawCreated.isNotEmpty) {
+              createdAt = rawCreated;
             }
-          } catch (e) {
-            debugPrint('Error parsing Firestore subcategories: $e');
-          }
-
-          List<SubCategory> mergedSubcategories = [];
-          for (var subcat in firestoreSubcategories) {
-            try {
-              mergedSubcategories.add(SubCategory.fromJson(subcat));
-            } catch (e) {
-              debugPrint('Error in converting subcategory: $e');
+            final rawRemarks = data['remarks'];
+            if (rawRemarks is Map) {
+              remarks = Map<String, dynamic>.from(rawRemarks);
             }
+            await oldRef.delete();
           }
 
-          for (var updated in updatedSubcategories) {
-            final key = updated.code.trim();
-            int idx = mergedSubcategories.indexWhere(
-              (s) => s.code.trim() == key,
+          final conflict = await col.doc(code).get();
+          if (conflict.exists) {
+            throw Exception(
+              'Subcategory code "$code" already exists. Use a different code.',
             );
-            if (idx != -1) {
-              mergedSubcategories[idx] = updated;
-            } else {
-              mergedSubcategories.add(updated);
+          }
+
+          await col.doc(code).set(
+                payload.toFirestoreMap(
+                  genCatCode: widget.categoryCode,
+                  createdAt: createdAt,
+                  updatedAt: now,
+                  remarks: remarks,
+                ),
+              );
+        } else {
+          final ref = col.doc(code);
+          final existing = await ref.get();
+          if (!widget.isUpdate && existing.exists) {
+            throw Exception(
+              'Subcategory code "$code" already exists. Use a different code.',
+            );
+          }
+
+          var createdAt = now;
+          var remarks = <String, dynamic>{};
+          if (existing.exists) {
+            final data = existing.data() ?? {};
+            final rawCreated = data['created_at'];
+            if (rawCreated is Timestamp) {
+              createdAt = rawCreated.toDate().toIso8601String();
+            } else if (rawCreated is String && rawCreated.isNotEmpty) {
+              createdAt = rawCreated;
+            }
+            final rawRemarks = data['remarks'];
+            if (rawRemarks is Map) {
+              remarks = Map<String, dynamic>.from(rawRemarks);
             }
           }
 
-          _assertUniqueSubcategoryCodes(mergedSubcategories);
+          await ref.set(
+            payload.toFirestoreMap(
+              genCatCode: widget.categoryCode,
+              createdAt: createdAt,
+              updatedAt: now,
+              remarks: remarks,
+            ),
+          );
+        }
 
-          List<Map<String, dynamic>> subcategoriesJson = mergedSubcategories
-              .map((subcategory) {
-                String attributesToUse = subcategory.attributes;
-                if (subcategory.attributes.isNotEmpty) {
-                  try {
-                    Map<String, dynamic> attributesMap = jsonDecode(
-                      subcategory.attributes,
-                    );
-                    Map<String, dynamic> sortedAttributesMap = {};
-                    attributesMap.forEach((key, value) {
-                      if (value is Map) {
-                        List<String> keys = (value as Map<String, dynamic>).keys
-                            .toList();
-                        List<String> sortedKeys = _smartSort(keys);
-                        Map<String, dynamic> sortedValue = {};
-                        for (String k in sortedKeys) {
-                          sortedValue[k] = value[k];
-                        }
-                        sortedAttributesMap[key] = sortedValue;
-                      } else {
-                        sortedAttributesMap[key] = value;
-                      }
-                    });
-                    attributesToUse = jsonEncode(sortedAttributesMap);
-                  } catch (e) {
-                    attributesToUse = subcategory.attributes;
-                  }
-                }
-                return {
-                  'code': subcategory.code,
-                  'name': subcategory.name,
-                  'attributes': attributesToUse,
-                  'attribute_types': subcategory.attributeTypes,
-                  'hsn_code': subcategory.hsnCode,
-                  'unit': subcategory.unit ?? 'Piece',
-                  'description': subcategory.description ?? '',
-                  'gst_rate': subcategory.gstRate,
-                };
-              })
-              .toList();
-
-          transaction.update(docRef, {
-            'subcategories': jsonEncode(subcategoriesJson),
-            'updated_at': DateTime.now(),
-            'version': FieldValue.increment(1),
-          });
-        });
-
-        debugPrint('Successfully updated subcategories in Firestore');
+        debugPrint('Successfully saved subcategory to general_sub_categories');
         return;
       } catch (e) {
         retryCount++;
         debugPrint(
-          'Error updating Firestore subcategories (attempt $retryCount): $e',
+          'Error saving subcategory (attempt $retryCount): $e',
         );
 
         if (retryCount >= maxRetries) {
           if (e.toString().contains('already exists')) {
-            throw Exception(
-              'This subcategory has already been added by another user. Please refresh and try again.',
-            );
-          } else if (e.toString().contains('not found') ||
-              e.toString().contains('deleted')) {
-            throw Exception(
-              'The category was modified or deleted by another user. Please refresh and try again.',
-            );
-          } else {
-            throw Exception(
-              'Failed to save after multiple attempts. Please check your connection and try again.',
-            );
+            rethrow;
           }
+          throw Exception(
+            'Failed to save after multiple attempts. Please check your connection and try again.',
+          );
         }
 
         await Future.delayed(Duration(milliseconds: 500 * retryCount));
@@ -1297,8 +1307,11 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
                                 updatedSubcategories,
                               );
 
-                              await _updateFirestoreSubcategories(
-                                updatedSubcategories,
+                              await _saveSubcategoryToCollection(
+                                newCategory,
+                                previousCode: widget.isUpdate
+                                    ? widget.selectedSubcategory?.code
+                                    : null,
                               );
 
                               if (mounted) {

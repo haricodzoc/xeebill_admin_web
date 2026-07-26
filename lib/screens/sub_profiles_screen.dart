@@ -560,6 +560,7 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
                                 });
                               },
                               child: SubProfileCard(
+                                userDocumentId: widget.userId,
                                 profile: profile,
                                 canActivate: false,
                                 isActivating: _isProfileActivating(profile.id),
@@ -596,6 +597,7 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
 
 // Sub Profile Card Widget
 class SubProfileCard extends StatefulWidget {
+  final String userDocumentId;
   final SubProfileModel profile;
   final bool canActivate;
   final bool isActivating;
@@ -604,6 +606,7 @@ class SubProfileCard extends StatefulWidget {
 
   const SubProfileCard({
     super.key,
+    required this.userDocumentId,
     required this.profile,
     required this.canActivate,
     required this.isActivating,
@@ -617,8 +620,20 @@ class SubProfileCard extends StatefulWidget {
 
 class _SubProfileCardState extends State<SubProfileCard> {
   bool isUpdatingPermission = false;
+  bool isUpdatingSettings = false;
   bool _isUpdatingStatus = false;
   bool _permissionsExpanded = false;
+  bool _settingsExpanded = false;
+
+  bool _flashOnScan = false;
+  bool _voiceBillingEnabled = false;
+  bool _barcodeScanningEnabled = false;
+  bool _repeatScanning = false;
+  bool _externalScanner = false;
+  bool _scannedItemConfirmation = false;
+  bool _directItemAdditionEnabled = false;
+  String _receiptSize = kDefaultReceiptSize;
+
   final Map<String, bool> _enabled = {
     'Bills': false,
     'Categories': false,
@@ -626,21 +641,25 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Reports': false,
     'Discounts': false,
     'Credits & Payments': false,
-    'Service History': false,
     'Dashboard': false,
+    'Contacts': false,
+    'Services': false,
     'Button': false,
   };
   final Map<String, bool> _itemsOptions = {
+    'View items': false,
     'Add items': false,
     'Edit items': false,
     'Delete items': false,
     'Map items': false,
     'Print label': false,
+    'Item Location': false,
   };
   final Map<String, bool> _categoriesOptions = {
     'Add categories': false,
     'Edit categories': false,
     'Delete categories': false,
+    'Generic attributes': false,
   };
   final Map<String, bool> _reportsOptions = {
     'View sales report': false,
@@ -653,6 +672,15 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Bill Summary': false,
     'Item Summary': false,
   };
+  final Map<String, bool> _servicesOptions = {
+    'Service orders': false,
+    'Services': false,
+    'Service reports': false,
+  };
+  final Map<String, bool> _billsOptions = {
+    'View all bills': false,
+    'View profile bills only': false,
+  };
 
   @override
   void initState() {
@@ -661,12 +689,11 @@ class _SubProfileCardState extends State<SubProfileCard> {
   }
 
   Future<void> _loadPermissions() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (widget.userDocumentId.isEmpty) return;
     try {
       final doc = await FirebaseFirestore.instance
           .collection('users')
-          .doc(user.uid)
+          .doc(widget.userDocumentId)
           .collection('subProfiles')
           .doc(widget.profile.id)
           .get();
@@ -682,6 +709,9 @@ class _SubProfileCardState extends State<SubProfileCard> {
           (data['dashBoardOptions'] as Map?)?.cast<String, dynamic>();
       final legacyRevenueOptions =
           (data['revenueSummaryOptions'] as Map?)?.cast<String, dynamic>();
+      final services = (data['servicesOptions'] as Map?)?.cast<String, dynamic>();
+      final bills = (data['billsOptions'] as Map?)?.cast<String, dynamic>();
+      final settings = (data['settingsOptions'] as Map?)?.cast<String, dynamic>();
 
       if (mounted) {
         setState(() {
@@ -701,14 +731,16 @@ class _SubProfileCardState extends State<SubProfileCard> {
           }
           if (cats != null) {
             cats.forEach((k, v) {
-              if (_categoriesOptions.containsKey(k))
+              if (_categoriesOptions.containsKey(k)) {
                 _categoriesOptions[k] = (v == true);
+              }
             });
           }
           if (reps != null) {
             reps.forEach((k, v) {
-              if (_reportsOptions.containsKey(k))
+              if (_reportsOptions.containsKey(k)) {
                 _reportsOptions[k] = (v == true);
+              }
             });
           }
           final optionSource = dashboardOptions ?? legacyRevenueOptions;
@@ -718,6 +750,52 @@ class _SubProfileCardState extends State<SubProfileCard> {
                 _dashBoardOptions[k] = (v == true);
               }
             });
+          }
+          if (services != null) {
+            services.forEach((k, v) {
+              if (_servicesOptions.containsKey(k)) {
+                _servicesOptions[k] = (v == true);
+              }
+            });
+          } else if (_enabled['Services'] == true) {
+            _servicesOptions['Service orders'] = true;
+            _servicesOptions['Services'] = true;
+          }
+          if (bills != null) {
+            bills.forEach((k, v) {
+              if (_billsOptions.containsKey(k)) {
+                _billsOptions[k] = (v == true);
+              }
+            });
+          } else if (_enabled['Bills'] == true) {
+            _billsOptions['View profile bills only'] = true;
+          }
+          if (settings != null) {
+            if (settings['flashOnScan'] != null) {
+              _flashOnScan = settings['flashOnScan'] == true;
+            }
+            if (settings['voiceBillingEnabled'] != null) {
+              _voiceBillingEnabled = settings['voiceBillingEnabled'] == true;
+            }
+            if (settings['barcodeScanningEnabled'] != null) {
+              _barcodeScanningEnabled = settings['barcodeScanningEnabled'] == true;
+            }
+            if (settings['repeatScanning'] != null) {
+              _repeatScanning = settings['repeatScanning'] == true;
+            }
+            if (settings['externalScanner'] != null) {
+              _externalScanner = settings['externalScanner'] == true;
+            }
+            if (settings['scannedItemConfirmation'] != null) {
+              _scannedItemConfirmation = settings['scannedItemConfirmation'] == true;
+            }
+            if (settings['directItemAdditionEnabled'] != null) {
+              _directItemAdditionEnabled =
+                  settings['directItemAdditionEnabled'] == true;
+            }
+            if (settings['receiptSize'] != null) {
+              _receiptSize = receiptSizeFromRemote(settings['receiptSize']);
+            }
           }
         });
       }
@@ -730,9 +808,104 @@ class _SubProfileCardState extends State<SubProfileCard> {
     }
   }
 
+  Map<String, dynamic> _settingsOptionsMap() => {
+        'flashOnScan': _flashOnScan,
+        'voiceBillingEnabled': _voiceBillingEnabled,
+        'barcodeScanningEnabled': _barcodeScanningEnabled,
+        'repeatScanning': _repeatScanning,
+        'externalScanner': _externalScanner,
+        'scannedItemConfirmation': _scannedItemConfirmation,
+        'directItemAdditionEnabled': _directItemAdditionEnabled,
+        'receiptSize': _receiptSize,
+      };
+
+  Future<void> _saveSettings() async {
+    if (widget.userDocumentId.isEmpty) return;
+    final docRef = FirebaseFirestore.instance
+        .collection('users')
+        .doc(widget.userDocumentId)
+        .collection('subProfiles')
+        .doc(widget.profile.id);
+    await docRef.set({
+      'settingsOptions': _settingsOptionsMap(),
+    }, SetOptions(merge: true));
+  }
+
+  bool get _areAllPermissionsSelected {
+    for (final key in _enabled.keys) {
+      if (key == 'Button' ||
+          key == 'Items' ||
+          key == 'Categories' ||
+          key == 'Reports' ||
+          key == 'Dashboard' ||
+          key == 'Services' ||
+          key == 'Bills') {
+        continue;
+      }
+      if (_enabled[key] != true) return false;
+    }
+    return _itemsOptions.values.every((v) => v) &&
+        _categoriesOptions.values.every((v) => v) &&
+        _reportsOptions.values.every((v) => v) &&
+        _dashBoardOptions.values.every((v) => v) &&
+        _servicesOptions.values.every((v) => v) &&
+        _billsOptions['View all bills'] == true;
+  }
+
+  bool? get _selectAllCheckboxValue {
+    if (_areAllPermissionsSelected) return true;
+    final anyTopLevel = _enabled.entries.any((e) =>
+        e.key != 'Button' &&
+        e.key != 'Items' &&
+        e.key != 'Categories' &&
+        e.key != 'Reports' &&
+        e.key != 'Dashboard' &&
+        e.key != 'Services' &&
+        e.key != 'Bills' &&
+        e.value);
+    final anySub = _itemsOptions.values.any((v) => v) ||
+        _categoriesOptions.values.any((v) => v) ||
+        _reportsOptions.values.any((v) => v) ||
+        _dashBoardOptions.values.any((v) => v) ||
+        _servicesOptions.values.any((v) => v) ||
+        _billsOptions.values.any((v) => v);
+    if (!anyTopLevel && !anySub) return false;
+    return null;
+  }
+
+  void _setAllPermissions(bool selected) {
+    for (final key in _enabled.keys) {
+      if (key != 'Button') {
+        _enabled[key] = selected;
+      }
+    }
+    for (final key in _itemsOptions.keys) {
+      _itemsOptions[key] = selected;
+    }
+    for (final key in _categoriesOptions.keys) {
+      _categoriesOptions[key] = selected;
+    }
+    for (final key in _reportsOptions.keys) {
+      _reportsOptions[key] = selected;
+    }
+    for (final key in _dashBoardOptions.keys) {
+      _dashBoardOptions[key] = selected;
+    }
+    for (final key in _servicesOptions.keys) {
+      _servicesOptions[key] = selected;
+    }
+    for (final key in _billsOptions.keys) {
+      if (selected) {
+        _billsOptions['View all bills'] = true;
+        _billsOptions['View profile bills only'] = false;
+      } else {
+        _billsOptions[key] = false;
+      }
+    }
+  }
+
   Future<void> _savePermissions() async {
-    final user = FirebaseAuth.instance.currentUser;
-    if (user == null) return;
+    if (widget.userDocumentId.isEmpty) return;
     _enabled['Items'] = _itemsOptions.values.any((val) => val == true);
     _enabled['Categories'] = _categoriesOptions.values.any(
       (val) => val == true,
@@ -740,9 +913,11 @@ class _SubProfileCardState extends State<SubProfileCard> {
     _enabled['Reports'] = _reportsOptions.values.any((val) => val == true);
     _enabled['Dashboard'] =
         _dashBoardOptions.values.any((val) => val == true);
+    _enabled['Services'] = _servicesOptions.values.any((val) => val == true);
+    _enabled['Bills'] = _billsOptions.values.any((val) => val == true);
     final docRef = FirebaseFirestore.instance
         .collection('users')
-        .doc(user.uid)
+        .doc(widget.userDocumentId)
         .collection('subProfiles')
         .doc(widget.profile.id);
     try {
@@ -752,6 +927,8 @@ class _SubProfileCardState extends State<SubProfileCard> {
         'categoriesOptions': _categoriesOptions,
         'reportsOptions': _reportsOptions,
         'dashBoardOptions': _dashBoardOptions,
+        'servicesOptions': _servicesOptions,
+        'billsOptions': _billsOptions,
       }, SetOptions(merge: true));
     } catch (e) {
       debugPrint('Failed saving subprofile permissions: $e');
@@ -759,6 +936,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
         'Failed saving subprofile permissions: $e',
         StackTrace.current,
       );
+      rethrow;
     }
   }
 
@@ -1186,12 +1364,32 @@ class _SubProfileCardState extends State<SubProfileCard> {
                             children: [
                               Column(
                                 children: [
-                                  // main options
+                                  CheckboxListTile(
+                                    dense: true,
+                                    contentPadding: EdgeInsets.zero,
+                                    tristate: true,
+                                    title: const Text(
+                                      'Select All',
+                                      style: TextStyle(
+                                        fontSize: 16,
+                                        fontWeight: FontWeight.bold,
+                                      ),
+                                    ),
+                                    value: _selectAllCheckboxValue,
+                                    onChanged: (_) {
+                                      setState(() {
+                                        _setAllPermissions(!_areAllPermissionsSelected);
+                                      });
+                                    },
+                                  ),
+                                  const Divider(height: 1),
                                   for (final key in _enabled.keys)
                                     if (key != 'Items' &&
                                         key != 'Categories' &&
                                         key != 'Reports' &&
                                         key != 'Dashboard' &&
+                                        key != 'Services' &&
+                                        key != 'Bills' &&
                                         key != 'Button')
                                       CheckboxListTile(
                                         dense: true,
@@ -1209,6 +1407,64 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                             _enabled[key] = v ?? false;
                                           });
                                         },
+                                      )
+                                    else if (key == 'Bills')
+                                      Theme(
+                                        data: Theme.of(context).copyWith(
+                                          dividerColor: Colors.transparent,
+                                        ),
+                                        child: ExpansionTile(
+                                          tilePadding: const EdgeInsets.only(
+                                            right: 8,
+                                            left: 0,
+                                          ),
+                                          title: const Row(
+                                            children: [
+                                              Text(
+                                                'Bills',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          childrenPadding:
+                                              const EdgeInsets.only(
+                                                left: 8,
+                                                right: 0,
+                                                bottom: 0,
+                                              ),
+                                          children: [
+                                            for (final sub in _billsOptions.keys)
+                                              CheckboxListTile(
+                                                dense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                                title: Text(sub),
+                                                value: _billsOptions[sub],
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    final checked = v ?? false;
+                                                    if (sub == 'View all bills' &&
+                                                        checked) {
+                                                      _billsOptions[
+                                                              'View profile bills only'] =
+                                                          false;
+                                                      _billsOptions[sub] = true;
+                                                    } else if (sub ==
+                                                            'View profile bills only' &&
+                                                        checked) {
+                                                      _billsOptions[
+                                                          'View all bills'] = false;
+                                                      _billsOptions[sub] = true;
+                                                    } else {
+                                                      _billsOptions[sub] = false;
+                                                    }
+                                                  });
+                                                },
+                                              ),
+                                          ],
+                                        ),
                                       )
                                     else if (key == 'Items')
                                       // items option expands to show sub-options
@@ -1391,6 +1647,51 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                           ],
                                         ),
                                       )
+                                    else if (key == 'Services')
+                                      Theme(
+                                        data: Theme.of(context).copyWith(
+                                          dividerColor: Colors.transparent,
+                                        ),
+                                        child: ExpansionTile(
+                                          tilePadding: const EdgeInsets.only(
+                                            right: 8,
+                                            left: 0,
+                                          ),
+                                          title: const Row(
+                                            children: [
+                                              Text(
+                                                'Services',
+                                                style: TextStyle(
+                                                  fontSize: 16,
+                                                  fontWeight: FontWeight.w500,
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          childrenPadding:
+                                              const EdgeInsets.only(
+                                                left: 8,
+                                                right: 0,
+                                                bottom: 0,
+                                              ),
+                                          children: [
+                                            for (final sub
+                                                in _servicesOptions.keys)
+                                              CheckboxListTile(
+                                                dense: true,
+                                                contentPadding: EdgeInsets.zero,
+                                                title: Text(sub),
+                                                value: _servicesOptions[sub],
+                                                onChanged: (v) {
+                                                  setState(() {
+                                                    _servicesOptions[sub] =
+                                                        v ?? false;
+                                                  });
+                                                },
+                                              ),
+                                          ],
+                                        ),
+                                      )
                                     else if (key == 'Button')
                                       Padding(
                                         padding: const EdgeInsets.only(
@@ -1475,6 +1776,273 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                         ),
                                       ),
                                 ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryWhite,
+                          borderRadius: BorderRadius.circular(10),
+                          boxShadow: const [
+                            BoxShadow(
+                              color: Colors.black12,
+                              blurRadius: 4,
+                              offset: Offset(0, 2),
+                            ),
+                          ],
+                        ),
+                        child: Theme(
+                          data: Theme.of(context).copyWith(
+                            dividerColor: Colors.transparent,
+                          ),
+                          child: ExpansionTile(
+                            title: const Text(
+                              'Settings',
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                            tilePadding: const EdgeInsets.only(
+                              right: 15,
+                              left: 15,
+                            ),
+                            initiallyExpanded: _settingsExpanded,
+                            onExpansionChanged: (expanded) {
+                              setState(() {
+                                _settingsExpanded = expanded;
+                              });
+                            },
+                            childrenPadding: const EdgeInsets.only(
+                              left: 8,
+                              right: 8,
+                              bottom: 4,
+                            ),
+                            children: [
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Flash on scan'),
+                                subtitle: Text(
+                                  'Use the camera flash when this sub-profile scans barcodes.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _flashOnScan,
+                                onChanged: (val) =>
+                                    setState(() => _flashOnScan = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Voice billing'),
+                                subtitle: Text(
+                                  'Allow microphone voice search to add items while billing.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _voiceBillingEnabled,
+                                onChanged: (val) =>
+                                    setState(() => _voiceBillingEnabled = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Barcode scanning'),
+                                subtitle: Text(
+                                  'Show barcode scan actions on billing, items, and service screens.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _barcodeScanningEnabled,
+                                onChanged: (val) => setState(
+                                  () => _barcodeScanningEnabled = val,
+                                ),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Repeat scanning'),
+                                subtitle: Text(
+                                  'Keep the scanner ready for the next item after confirming a scan.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _repeatScanning,
+                                onChanged: (val) =>
+                                    setState(() => _repeatScanning = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('External scanner'),
+                                subtitle: Text(
+                                  'Enable Bluetooth SPP barcode scanners.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _externalScanner,
+                                onChanged: (val) =>
+                                    setState(() => _externalScanner = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Scanned item confirmation'),
+                                subtitle: Text(
+                                  'Show a quantity dialog before each scanned item is added.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _scannedItemConfirmation,
+                                onChanged: (val) => setState(
+                                  () => _scannedItemConfirmation = val,
+                                ),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Direct item addition'),
+                                subtitle: Text(
+                                  'Show quick-add shortcuts on billing and service screens.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _directItemAdditionEnabled,
+                                onChanged: (val) => setState(
+                                  () => _directItemAdditionEnabled = val,
+                                ),
+                              ),
+                              Padding(
+                                padding: const EdgeInsets.only(top: 8, bottom: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Receipt size',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Paper width for bill receipts on this sub-profile\'s printer.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DropdownButtonFormField<String>(
+                                      value: _receiptSize,
+                                      isExpanded: true,
+                                      items: RECEIPT_SIZE_OPTIONS
+                                          .map(
+                                            (size) => DropdownMenuItem(
+                                              value: size,
+                                              child: Text(size),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (val) {
+                                        if (val == null) return;
+                                        setState(() => _receiptSize = val);
+                                      },
+                                      decoration: const InputDecoration(
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Padding(
+                                padding: const EdgeInsets.only(
+                                  right: 10.0,
+                                  bottom: 10.0,
+                                  top: 4.0,
+                                ),
+                                child: ElevatedButton(
+                                  onPressed: isUpdatingSettings
+                                      ? null
+                                      : () async {
+                                          if (isUpdatingSettings) return;
+                                          setState(() {
+                                            isUpdatingSettings = true;
+                                          });
+                                          try {
+                                            await _saveSettings();
+                                            if (mounted) {
+                                              showSnackbar(
+                                                context,
+                                                'Settings updated successfully',
+                                                backgroundColor: Colors.green,
+                                              );
+                                              setState(() {
+                                                _settingsExpanded = false;
+                                              });
+                                            }
+                                          } catch (e) {
+                                            if (mounted) {
+                                              showSnackbar(
+                                                context,
+                                                'Failed to update settings: $e',
+                                                backgroundColor: Colors.red,
+                                              );
+                                            }
+                                          } finally {
+                                            if (mounted) {
+                                              setState(() {
+                                                isUpdatingSettings = false;
+                                              });
+                                            }
+                                          }
+                                        },
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: AppColors.primaryGreen,
+                                    foregroundColor: Colors.white,
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 20,
+                                      vertical: 12,
+                                    ),
+                                    shape: RoundedRectangleBorder(
+                                      borderRadius: BorderRadius.circular(8),
+                                    ),
+                                  ),
+                                  child: isUpdatingSettings
+                                      ? const SizedBox(
+                                          width: 20,
+                                          height: 20,
+                                          child: CircularProgressIndicator(
+                                            strokeWidth: 2,
+                                            valueColor:
+                                                AlwaysStoppedAnimation<Color>(
+                                              Colors.white,
+                                            ),
+                                          ),
+                                        )
+                                      : const Text(
+                                          'Update Settings',
+                                          style: TextStyle(
+                                            fontSize: 14,
+                                            fontWeight: FontWeight.bold,
+                                          ),
+                                        ),
+                                ),
                               ),
                             ],
                           ),

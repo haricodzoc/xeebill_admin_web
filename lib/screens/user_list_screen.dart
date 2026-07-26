@@ -1,8 +1,11 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:xeebill_web/screens/settings_screen.dart';
+import 'package:xeebill_web/utils/app_colors.dart';
 import '../models/user_model.dart';
 import 'bills_screen.dart';
 import 'categories_screen.dart';
@@ -13,6 +16,8 @@ import 'reports_screen.dart';
 import 'credit_payments_screen.dart';
 import 'user_locations_screen.dart';
 import 'user_customers_screen.dart';
+import 'services_screen.dart';
+import 'user_payment_history_screen.dart';
 
 class UserListScreen extends StatefulWidget {
   const UserListScreen({super.key});
@@ -34,6 +39,7 @@ class _UserListScreenState extends State<UserListScreen> {
   Map<String, String> _rechargePlanTitlesById = {};
   final Map<String, Future<UserLocationsBootstrap>> _locationsBootstrapFutures =
       {};
+  final Set<String> _expandedUserKeys = {};
 
   static const String _kDefaultLabelSize = '38mm * 25mm';
   static const num _kDefaultRechargeAmount = 500;
@@ -363,8 +369,36 @@ class _UserListScreenState extends State<UserListScreen> {
     return _users.where((u) {
       final name = (u.name ?? '').toLowerCase();
       final email = (u.email ?? '').toLowerCase();
-      return name.contains(query) || email.contains(query);
+      final phone = (u.phone ?? '').toLowerCase();
+      final docId = (u.docId ?? '').toLowerCase();
+      return name.contains(query) ||
+          email.contains(query) ||
+          phone.contains(query) ||
+          docId.contains(query);
     }).toList();
+  }
+
+  String _initials(String? name) {
+    final parts = (name ?? '')
+        .trim()
+        .split(RegExp(r'\s+'))
+        .where((p) => p.isNotEmpty)
+        .toList();
+    if (parts.isEmpty) return 'U';
+    if (parts.length == 1) {
+      final s = parts.first;
+      return s.substring(0, s.length >= 2 ? 2 : 1).toUpperCase();
+    }
+    return ('${parts.first[0]}${parts.last[0]}').toUpperCase();
+  }
+
+  Color _accountStatusColor({
+    required bool isExpired,
+    required bool isExpiringSoon,
+  }) {
+    if (isExpired) return AppColors.primaryRed;
+    if (isExpiringSoon) return const Color(0xFFC27803);
+    return AppColors.successGreen;
   }
 
   @override
@@ -376,18 +410,25 @@ class _UserListScreenState extends State<UserListScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: const Color(0xFFF3F5F7),
       appBar: AppBar(
-        backgroundColor: Theme.of(context).colorScheme.inversePrimary,
+        elevation: 0,
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.primaryText,
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Users'),
+            const Text(
+              'Users',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
             if (!_isLoading && _users.isNotEmpty)
               Text(
                 '${_filteredUsers.length} user${_filteredUsers.length == 1 ? '' : 's'}',
-                style: const TextStyle(
+                style: TextStyle(
                   fontSize: 12,
-                  fontWeight: FontWeight.normal,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[600],
                 ),
               ),
           ],
@@ -395,27 +436,46 @@ class _UserListScreenState extends State<UserListScreen> {
         actions: [
           if (_isAdmin)
             IconButton(
-              icon: const Icon(Icons.person_add),
-              tooltip: 'Create customer',
-              onPressed: _showCreateCustomerDialog,
-            ),
-          if (_isAdmin)
-            IconButton(
-              icon: const Icon(Icons.refresh),
+              icon: const Icon(Icons.refresh_rounded),
               tooltip: 'Refresh',
               onPressed: _checkAdminAndFetchUsers,
             ),
+          if (_isAdmin)
+            Padding(
+              padding: const EdgeInsets.only(right: 8),
+              child: TextButton.icon(
+                onPressed: _showCreateCustomerDialog,
+                icon: const Icon(Icons.person_add_alt_1, size: 18),
+                label: const Text('Create'),
+                style: TextButton.styleFrom(
+                  foregroundColor: AppColors.primaryGreen,
+                ),
+              ),
+            ),
         ],
       ),
+      floatingActionButton: _isAdmin
+          ? FloatingActionButton.extended(
+              onPressed: _showCreateCustomerDialog,
+              backgroundColor: AppColors.primaryGreen,
+              foregroundColor: Colors.white,
+              elevation: 2,
+              icon: const Icon(Icons.person_add_alt_1),
+              label: const Text('Create Customer'),
+            )
+          : null,
       body: _isLoading
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  const CircularProgressIndicator(),
+                  CircularProgressIndicator(color: AppColors.primaryGreen),
                   if (_isCheckingAdmin) ...[
                     const SizedBox(height: 16),
-                    const Text('Checking admin access...'),
+                    Text(
+                      'Checking admin access…',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
                   ],
                 ],
               ),
@@ -427,24 +487,34 @@ class _UserListScreenState extends State<UserListScreen> {
                 child: Column(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    Icon(Icons.error_outline, size: 64, color: Colors.red[300]),
+                    Icon(
+                      Icons.error_outline_rounded,
+                      size: 48,
+                      color: AppColors.primaryRed.withValues(alpha: 0.85),
+                    ),
                     const SizedBox(height: 16),
                     Text(
                       _errorMessage!,
-                      style: TextStyle(color: Colors.red[700]),
+                      style: TextStyle(color: Colors.grey[700]),
                       textAlign: TextAlign.center,
                     ),
                     const SizedBox(height: 16),
                     if (!_isAdmin)
                       ElevatedButton(
-                        onPressed: () {
-                          Navigator.pop(context);
-                        },
+                        onPressed: () => Navigator.pop(context),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                        ),
                         child: const Text('Go Back'),
                       )
                     else
                       ElevatedButton(
                         onPressed: _checkAdminAndFetchUsers,
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                        ),
                         child: const Text('Retry'),
                       ),
                   ],
@@ -456,133 +526,172 @@ class _UserListScreenState extends State<UserListScreen> {
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.people_outline, size: 64, color: Colors.grey[400]),
+                  Container(
+                    width: 72,
+                    height: 72,
+                    decoration: BoxDecoration(
+                      color: AppColors.primaryGreen.withValues(alpha: 0.08),
+                      shape: BoxShape.circle,
+                    ),
+                    child: Icon(
+                      Icons.people_outline,
+                      size: 36,
+                      color: AppColors.primaryGreen,
+                    ),
+                  ),
                   const SizedBox(height: 16),
                   Text(
                     'No users found',
-                    style: TextStyle(color: Colors.grey[600], fontSize: 18),
+                    style: TextStyle(
+                      color: AppColors.primaryText,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                    ),
                   ),
                 ],
               ),
             )
           : RefreshIndicator(
+              color: AppColors.primaryGreen,
               onRefresh: _fetchUsers,
               child: Column(
                 children: [
-                  // Search bar
-                  Padding(
-                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-                    child: TextField(
-                      controller: _searchController,
-                      decoration: InputDecoration(
-                        hintText: 'Search by name or email',
-                        prefixIcon: const Icon(Icons.search),
-                        suffixIcon: _searchQuery.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.clear),
-                                onPressed: () {
-                                  setState(() {
-                                    _searchQuery = '';
-                                    _searchController.clear();
-                                  });
-                                },
-                              )
-                            : null,
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
+                  Container(
+                    width: double.infinity,
+                    color: Colors.white,
+                    padding: const EdgeInsets.fromLTRB(16, 12, 16, 14),
+                    child: Column(
+                      children: [
+                        TextField(
+                          controller: _searchController,
+                          decoration: InputDecoration(
+                            hintText: 'Search by name, email, phone, or doc id',
+                            hintStyle: TextStyle(
+                              color: Colors.grey[500],
+                              fontSize: 14,
+                            ),
+                            prefixIcon: Icon(
+                              Icons.search_rounded,
+                              color: Colors.grey[500],
+                            ),
+                            suffixIcon: _searchQuery.isNotEmpty
+                                ? IconButton(
+                                    icon: const Icon(Icons.clear_rounded),
+                                    onPressed: () {
+                                      setState(() {
+                                        _searchQuery = '';
+                                        _searchController.clear();
+                                      });
+                                    },
+                                  )
+                                : null,
+                            filled: true,
+                            fillColor: const Color(0xFFF5F7F9),
+                            contentPadding: const EdgeInsets.symmetric(
+                              horizontal: 14,
+                              vertical: 12,
+                            ),
+                            border: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide.none,
+                            ),
+                            enabledBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: const BorderSide(
+                                color: Color(0xFFE8ECF0),
+                              ),
+                            ),
+                            focusedBorder: OutlineInputBorder(
+                              borderRadius: BorderRadius.circular(10),
+                              borderSide: BorderSide(
+                                color: AppColors.primaryGreen,
+                                width: 1.2,
+                              ),
+                            ),
+                            isDense: true,
+                          ),
+                          onChanged: (value) {
+                            setState(() => _searchQuery = value);
+                          },
                         ),
-                        isDense: true,
-                        contentPadding: const EdgeInsets.symmetric(
-                          horizontal: 16,
-                          vertical: 10,
+                        const SizedBox(height: 12),
+                        Builder(
+                          builder: (context) {
+                            final now = DateTime.now();
+                            final soonThreshold = now.add(
+                              const Duration(days: 7),
+                            );
+                            final expiredCount = _filteredUsers
+                                .where(
+                                  (u) =>
+                                      u.accountExpiry != null &&
+                                      u.accountExpiry!.isBefore(now),
+                                )
+                                .length;
+                            final expiringSoonCount =
+                                _filteredUsers.where((u) {
+                              final expiry = u.accountExpiry;
+                              if (expiry == null) return false;
+                              return !expiry.isBefore(now) &&
+                                  expiry.isBefore(soonThreshold);
+                            }).length;
+
+                            return Row(
+                              children: [
+                                Expanded(
+                                  child: _buildSummaryItem(
+                                    'Total',
+                                    _filteredUsers.length.toString(),
+                                    Icons.people_outline,
+                                    AppColors.primaryGreen,
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _buildSummaryItem(
+                                    'Expiring < 7d',
+                                    expiringSoonCount.toString(),
+                                    Icons.schedule_rounded,
+                                    const Color(0xFFC27803),
+                                  ),
+                                ),
+                                const SizedBox(width: 8),
+                                Expanded(
+                                  child: _buildSummaryItem(
+                                    'Expired',
+                                    expiredCount.toString(),
+                                    Icons.warning_amber_rounded,
+                                    AppColors.primaryRed,
+                                  ),
+                                ),
+                              ],
+                            );
+                          },
                         ),
-                      ),
-                      onChanged: (value) {
-                        setState(() {
-                          _searchQuery = value;
-                        });
-                      },
+                      ],
                     ),
                   ),
-                  // Summary Card
-                  if (_users.isNotEmpty)
-                    Container(
-                      margin: const EdgeInsets.fromLTRB(16, 8, 16, 16),
-                      padding: const EdgeInsets.all(16.0),
-                      decoration: BoxDecoration(
-                        color: Theme.of(context).colorScheme.primaryContainer,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: Builder(
-                        builder: (context) {
-                          final now = DateTime.now();
-                          final soonThreshold = now.add(
-                            const Duration(days: 7),
-                          );
-
-                          final expiredCount = _filteredUsers
-                              .where(
-                                (u) =>
-                                    u.accountExpiry != null &&
-                                    u.accountExpiry!.isBefore(now),
-                              )
-                              .length;
-
-                          final expiringSoonCount = _filteredUsers.where((u) {
-                            final expiry = u.accountExpiry;
-                            if (expiry == null) return false;
-                            return !expiry.isBefore(now) &&
-                                expiry.isBefore(soonThreshold);
-                          }).length;
-
-                          return Row(
-                            mainAxisAlignment: MainAxisAlignment.spaceAround,
-                            children: [
-                              _buildSummaryItem(
-                                context,
-                                'Total Users',
-                                _filteredUsers.length.toString(),
-                                Icons.people,
-                              ),
-                              _buildSummaryItem(
-                                context,
-                                'Admins',
-                                _filteredUsers
-                                    .where(
-                                      (u) => u.role?.toUpperCase() == 'ADMIN',
-                                    )
-                                    .length
-                                    .toString(),
-                                Icons.admin_panel_settings,
-                              ),
-                              _buildSummaryItem(
-                                context,
-                                'Expiring < 7d',
-                                expiringSoonCount.toString(),
-                                Icons.access_time,
-                                Colors.orange,
-                              ),
-                              _buildSummaryItem(
-                                context,
-                                'Expired',
-                                expiredCount.toString(),
-                                Icons.warning,
-                                Colors.red,
-                              ),
-                            ],
-                          );
-                        },
-                      ),
-                    ),
-                  // Users List
+                  Container(height: 1, color: const Color(0xFFE8ECF0)),
                   Expanded(
-                    child: ListView.builder(
-                      padding: const EdgeInsets.symmetric(horizontal: 16.0),
-                      itemCount: _filteredUsers.length,
-                      itemBuilder: (context, index) {
-                        return _buildUserCard(_filteredUsers[index]);
-                      },
-                    ),
+                    child: _filteredUsers.isEmpty
+                        ? Center(
+                            child: Text(
+                              'No users match your search',
+                              style: TextStyle(color: Colors.grey[600]),
+                            ),
+                          )
+                        : ListView.builder(
+                            padding: EdgeInsets.fromLTRB(
+                              16,
+                              14,
+                              16,
+                              _isAdmin ? 96 : 24,
+                            ),
+                            itemCount: _filteredUsers.length,
+                            itemBuilder: (context, index) {
+                              return _buildUserCard(_filteredUsers[index]);
+                            },
+                          ),
                   ),
                 ],
               ),
@@ -607,324 +716,379 @@ class _UserListScreenState extends State<UserListScreen> {
         ? 'Free'
         : (_rechargePlanTitlesById[planId] ??
               (planId.isEmpty ? 'Free' : 'Unknown Plan ($planId)'));
+    final statusColor = _accountStatusColor(
+      isExpired: isExpired,
+      isExpiringSoon: isExpiringSoon,
+    );
+    final statusLabel = isExpired
+        ? 'Expired'
+        : isExpiringSoon
+            ? 'Expiring soon'
+            : 'Active';
 
-    return Card(
-      margin: const EdgeInsets.only(bottom: 16),
-      elevation: 2,
-      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-      child: Theme(
-        data: Theme.of(context).copyWith(dividerColor: Colors.transparent),
-        child: ExpansionTile(
-          onExpansionChanged: (expanded) {
-            if (!expanded) return;
-            final key = _userCacheKey(user);
-            _locationsBootstrapFutures.putIfAbsent(key, () async {
-              final ref = await _resolveUserDocRef(user);
-              if (ref == null) {
-                throw Exception('User document not found');
-              }
-              return loadUserLocationsBootstrap(ref);
-            });
-          },
-          tilePadding: const EdgeInsets.symmetric(
-            horizontal: 16.0,
-            vertical: 8.0,
+    final key = _userCacheKey(user);
+    final isExpanded = _expandedUserKeys.contains(key);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: const Color(0xFFE6E9ED)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.06),
+            blurRadius: 10,
+            offset: const Offset(0, 3),
           ),
-          childrenPadding: EdgeInsets.zero,
-          leading: CircleAvatar(
-            backgroundColor: isExpired
-                ? Colors.red[300]
-                : isExpiringSoon
-                ? Colors.orange[300]
-                : Theme.of(context).colorScheme.primary,
-            child: Text(
-              user.name?.substring(0, 1).toUpperCase() ?? 'U',
-              style: const TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
+        ],
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Stack(
+        children: [
+          Positioned(
+            left: 0,
+            top: 0,
+            bottom: 0,
+            width: 4,
+            child: ColoredBox(color: statusColor),
           ),
-          title: Text(
-            user.name ?? 'Unknown',
-            style: const TextStyle(fontWeight: FontWeight.bold),
-          ),
-          subtitle: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              if (user.email != null) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(Icons.email, size: 16, color: Colors.grey),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                        user.email!,
-                        style: TextStyle(color: Colors.grey[700], fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  const Icon(Icons.phone, size: 16, color: Colors.grey),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      '${user.phone ?? 'N/A'}  •  doc id:${user.docId ?? 'N/A'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: TextStyle(color: Colors.grey[700], fontSize: 12),
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 4),
-              Row(
-                children: [
-                  Icon(
-                    Icons.event,
-                    size: 16,
-                    color: isExpired
-                        ? Colors.red[700]
-                        : isExpiringSoon
-                        ? Colors.orange[700]
-                        : Colors.grey,
-                  ),
-                  const SizedBox(width: 4),
-                  Expanded(
-                    child: Text(
-                      '${isExpired ? 'Expired' : 'Expiry'}: $expiryText',
-                      style: TextStyle(
-                        color: isExpired
-                            ? Colors.red[700]
-                            : isExpiringSoon
-                            ? Colors.orange[700]
-                            : Colors.grey[700],
-                        fontSize: 12,
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-               
-              if (hasActiveDevice) ...[
-                const SizedBox(height: 4),
-                Row(
-                  children: [
-                    const Icon(
-                      Icons.airplanemode_active,
-                      size: 16,
-                      color: Colors.grey,
-                    ),
-                    const SizedBox(width: 4),
-                    Expanded(
-                      child: Text(
-                       'active dev:$activeDevice',
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: TextStyle(color: Colors.grey[700], fontSize: 12),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-              if (user.role != null) ...[
-                const SizedBox(height: 4),
-                Chip(
-                  label: Text(user.role!, style: const TextStyle(fontSize: 11)),
-                  backgroundColor: user.role == 'ADMIN'
-                      ? Colors.blue[100]
-                      : Colors.grey[200],
-                  padding: EdgeInsets.zero,
-                ),
-              ],
-              if (isPremiumCustomer) ...[
-                const SizedBox(height: 4),
-                Chip(
-                  avatar: Icon(
-                    Icons.workspace_premium,
-                    size: 16,
-                    color: Colors.amber[900],
-                  ),
-                  label: const Text(
-                    'Premium customer',
-                    style: TextStyle(fontSize: 11, fontWeight: FontWeight.w600),
-                  ),
-                  backgroundColor: Colors.amber[50],
-                  side: BorderSide(color: Colors.amber.shade200),
-                  padding: EdgeInsets.zero,
-                ),
-              ],
-            ],
-          ),
-          trailing: isExpired
-              ? Icon(Icons.warning, color: Colors.red[700])
-              : isExpiringSoon
-              ? Icon(Icons.warning, color: Colors.orange[700])
-              : const Icon(Icons.chevron_right),
-          children: [
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 16.0),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _buildInfoRow('Doc ID', user.docId ?? 'N/A'),
-                  _buildInfoRow('User ID', user.userId ?? 'N/A'),
-                  _buildInfoRow('Phone', user.phone ?? 'N/A'),
-                  _buildInfoRow('Address', user.address ?? 'N/A'),
-                  _buildInfoRow('GST Number', user.gstNumber ?? 'N/A'),
-                  _buildInfoRow('Active Plan', activePlanName),
-                  _buildPremiumCustomerRow(user),
-                  _buildActiveDeviceRow(user),
-                  _buildAccountExpiryRow(user),
-                  _buildInfoRow('Created At', user.formatDate(user.createdAt)),
-                  _buildInfoRow('Updated At', user.formatDate(user.updatedAt)),
-                  _buildInfoRow('Last Login', user.formatDate(user.lastLogin)),
-                  _buildInfoRow(
-                    'Last Sync Time',
-                    user.formatDate(user.lastSyncTime),
-                  ),
-                  _buildInfoRow(
-                    'Bill Version',
-                    user.billVersion?.toString() ?? 'N/A',
-                  ),
-                  _buildInfoRow(
-                    'Item Version',
-                    user.itemVersion?.toString() ?? 'N/A',
-                  ),
-                  _buildInfoRow(
-                    'Reset Sync Time',
-                    user.resetSyncTime?.toString() ?? 'N/A',
-                  ),
-                  _buildInfoRow(
-                    'Upload Error Log',
-                    user.uploadErrorLog?.toString() ?? 'N/A',
-                  ),
-                  const SizedBox(height: 24),
-                  const Divider(),
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Quick Actions',
-                    style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
-                  ),
-                  const SizedBox(height: 12),
-                  Wrap(
-                    spacing: 8,
-                    runSpacing: 8,
+              InkWell(
+                onTap: () {
+                  setState(() {
+                    if (isExpanded) {
+                      _expandedUserKeys.remove(key);
+                    } else {
+                      _expandedUserKeys.add(key);
+                      _locationsBootstrapFutures.putIfAbsent(key, () async {
+                        final ref = await _resolveUserDocRef(user);
+                        if (ref == null) {
+                          throw Exception('User document not found');
+                        }
+                        return loadUserLocationsBootstrap(ref);
+                      });
+                    }
+                  });
+                },
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(16, 12, 8, 12),
+                  child: Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      _buildActionButton(
-                        context,
-                        'View Bills',
-                        Icons.receipt_long,
-                        Colors.blue,
-                        () => _navigateToBills(context, user),
+                      CircleAvatar(
+                        radius: 22,
+                        backgroundColor: statusColor.withValues(alpha: 0.12),
+                        child: Text(
+                          _initials(user.name),
+                          style: TextStyle(
+                            color: statusColor,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 13,
+                          ),
+                        ),
                       ),
-                      _buildActionButton(
-                        context,
-                        'Customers',
-                        Icons.groups_2_outlined,
-                        Colors.cyan,
-                        () => _navigateToCustomers(context, user),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              user.name ?? 'Unknown',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                                fontSize: 15,
+                                color: Color(0xFF1F2933),
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              [
+                                if ((user.email ?? '').isNotEmpty) user.email!,
+                                if ((user.phone ?? '').isNotEmpty) user.phone!,
+                              ].join('  ·  '),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: TextStyle(
+                                color: Colors.grey[700],
+                                fontSize: 12.5,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Wrap(
+                              spacing: 6,
+                              runSpacing: 6,
+                              children: [
+                                _metaChip(
+                                  icon: Icons.event_outlined,
+                                  label: '$statusLabel · $expiryText',
+                                  color: statusColor,
+                                ),
+                                _metaChip(
+                                  icon: Icons.workspace_premium_outlined,
+                                  label: activePlanName,
+                                  color: AppColors.primaryGreen,
+                                ),
+                                if (user.role != null)
+                                  _metaChip(
+                                    icon: Icons.badge_outlined,
+                                    label: user.role!,
+                                    color: user.role == 'ADMIN'
+                                        ? AppColors.primaryGreen
+                                        : AppColors.primaryGrey,
+                                  ),
+                                if (isPremiumCustomer)
+                                  _metaChip(
+                                    icon: Icons.star_rounded,
+                                    label: 'Premium',
+                                    color: const Color(0xFFB45309),
+                                  ),
+                                if (hasActiveDevice)
+                                  _metaChip(
+                                    icon: Icons.devices_outlined,
+                                    label: 'Device linked',
+                                    color: AppColors.primaryGrey,
+                                  ),
+                              ],
+                            ),
+                          ],
+                        ),
                       ),
-                      _buildActionButton(
-                        context,
-                        'Categories',
-                        Icons.category,
-                        Colors.green,
-                        () => _navigateToCategories(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Items',
-                        Icons.inventory_2,
-                        Colors.orange,
-                        () => _navigateToItems(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Revenue Summary',
-                        Icons.insights_outlined,
-                        Colors.deepOrange,
-                        () => _navigateToRevenueSummary(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Sub Profiles',
-                        Icons.people_outline,
-                        Colors.purple,
-                        () => _navigateToSubProfiles(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Locations',
-                        Icons.location_on_outlined,
-                        Colors.brown,
-                        () => _openUserLocations(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Reports',
-                        Icons.analytics,
-                        Colors.teal,
-                        () => _navigateToReports(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Credit & Payments',
-                        Icons.payment,
-                        Colors.indigo,
-                        () => _navigateToCreditPayments(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Settings',
-                        Icons.settings,
-                        Colors.grey,
-                        () => _navigateToSettings(context, user),
-                      ),
-                      _buildActionButton(
-                        context,
-                        'Additional Settings',
-                        Icons.tune,
-                        Colors.deepPurple,
-                        () => _showAdditionalSettingsDialog(user),
+                      Icon(
+                        isExpanded
+                            ? Icons.expand_less_rounded
+                            : Icons.expand_more_rounded,
+                        color: Colors.grey[500],
                       ),
                     ],
                   ),
-                  const SizedBox(height: 22),
-                ],
+                ),
               ),
+              if (isExpanded)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(16, 0, 12, 14),
+                  padding: const EdgeInsets.fromLTRB(14, 12, 14, 14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF8F9FB),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: const Color(0xFFE8ECF0)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        'ACCOUNT DETAILS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          letterSpacing: 0.7,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      _buildInfoRow('Doc ID', user.docId ?? 'N/A'),
+                      _buildInfoRow('User ID', user.userId ?? 'N/A'),
+                      _buildInfoRow('Phone', user.phone ?? 'N/A'),
+                      _buildInfoRow('Address', user.address ?? 'N/A'),
+                      _buildInfoRow('GST Number', user.gstNumber ?? 'N/A'),
+                      _buildInfoRow('Active Plan', activePlanName),
+                      _buildPremiumCustomerRow(user),
+                      _buildActiveDeviceRow(user),
+                      _buildAccountExpiryRow(user),
+                      _buildInfoRow(
+                        'Created At',
+                        user.formatDate(user.createdAt),
+                      ),
+                      _buildInfoRow(
+                        'Updated At',
+                        user.formatDate(user.updatedAt),
+                      ),
+                      _buildInfoRow(
+                        'Last Login',
+                        user.formatDate(user.lastLogin),
+                      ),
+                      _buildInfoRow(
+                        'Last Sync Time',
+                        user.formatDate(user.lastSyncTime),
+                      ),
+                      _buildInfoRow(
+                        'Bill Version',
+                        user.billVersion?.toString() ?? 'N/A',
+                      ),
+                      _buildInfoRow(
+                        'Item Version',
+                        user.itemVersion?.toString() ?? 'N/A',
+                      ),
+                      _buildInfoRow(
+                        'Reset Sync Time',
+                        user.resetSyncTime?.toString() ?? 'N/A',
+                      ),
+                      _buildInfoRow(
+                        'Upload Error Log',
+                        user.uploadErrorLog?.toString() ?? 'N/A',
+                      ),
+                      const SizedBox(height: 16),
+                      Text(
+                        'QUICK ACTIONS',
+                        style: TextStyle(
+                          fontSize: 11,
+                          letterSpacing: 0.7,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      Wrap(
+                        spacing: 8,
+                        runSpacing: 8,
+                        children: [
+                          _buildActionButton(
+                            'View Bills',
+                            Icons.receipt_long_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToBills(context, user),
+                          ),
+                          _buildActionButton(
+                            'Customers',
+                            Icons.groups_2_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToCustomers(context, user),
+                          ),
+                          _buildActionButton(
+                            'Categories',
+                            Icons.category_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToCategories(context, user),
+                          ),
+                          _buildActionButton(
+                            'Items',
+                            Icons.inventory_2_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToItems(context, user),
+                          ),
+                          _buildActionButton(
+                            'Services',
+                            Icons.build_circle_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToServices(context, user),
+                          ),
+                          _buildActionButton(
+                            'Revenue Summary',
+                            Icons.insights_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToRevenueSummary(context, user),
+                          ),
+                          _buildActionButton(
+                            'Sub Profiles',
+                            Icons.people_outline,
+                            AppColors.primaryGreen,
+                            () => _navigateToSubProfiles(context, user),
+                          ),
+                          _buildActionButton(
+                            'Locations',
+                            Icons.location_on_outlined,
+                            AppColors.primaryGreen,
+                            () => _openUserLocations(context, user),
+                          ),
+                          _buildActionButton(
+                            'Reports',
+                            Icons.analytics_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToReports(context, user),
+                          ),
+                          _buildActionButton(
+                            'Credit & Payments',
+                            Icons.payment_outlined,
+                            AppColors.primaryGreen,
+                            () => _navigateToCreditPayments(context, user),
+                          ),
+                          _buildActionButton(
+                            'Payment History',
+                            Icons.history_rounded,
+                            AppColors.primaryGreen,
+                            () => _navigateToPaymentHistory(context, user),
+                          ),
+                          _buildActionButton(
+                            'Settings',
+                            Icons.settings_outlined,
+                            AppColors.primaryGrey,
+                            () => _navigateToSettings(context, user),
+                          ),
+                          _buildActionButton(
+                            'Custom Template',
+                            Icons.code_rounded,
+                            AppColors.primaryGrey,
+                            () => _showCustomTemplateDialog(user),
+                          ),
+                          _buildActionButton(
+                            'Additional Settings',
+                            Icons.tune_rounded,
+                            AppColors.primaryGrey,
+                            () => _showAdditionalSettingsDialog(user),
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _metaChip({
+    required IconData icon,
+    required String label,
+    required Color color,
+  }) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.08),
+        borderRadius: BorderRadius.circular(6),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: 12, color: color),
+          const SizedBox(width: 4),
+          Text(
+            label,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: color,
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
 
   Widget _buildActionButton(
-    BuildContext context,
     String label,
     IconData icon,
     Color color,
     VoidCallback onPressed,
   ) {
-    return ElevatedButton.icon(
+    return OutlinedButton.icon(
       onPressed: onPressed,
-      icon: Icon(icon, size: 18),
+      icon: Icon(icon, size: 16),
       label: Text(label),
-      style: ElevatedButton.styleFrom(
-        backgroundColor: color.withOpacity(0.1),
+      style: OutlinedButton.styleFrom(
         foregroundColor: color,
+        side: BorderSide(color: color.withValues(alpha: 0.28)),
+        backgroundColor: Colors.white,
         elevation: 0,
-        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(8),
-          side: BorderSide(color: color.withOpacity(0.3)),
-        ),
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+        textStyle: const TextStyle(fontSize: 12.5, fontWeight: FontWeight.w600),
       ),
     );
   }
@@ -961,6 +1125,15 @@ class _UserListScreenState extends State<UserListScreen> {
       context,
       MaterialPageRoute(
         builder: (context) => ItemsScreen(userId: user.userId ?? ''),
+      ),
+    );
+  }
+
+  void _navigateToServices(BuildContext context, UserModel user) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => ServicesScreen(userId: user.userId ?? ''),
       ),
     );
   }
@@ -1048,11 +1221,25 @@ class _UserListScreenState extends State<UserListScreen> {
     );
   }
 
-  void _navigateToSettings(BuildContext context, UserModel user) {
-    // TODO: Navigate to settings screen when available
+  void _navigateToPaymentHistory(BuildContext context, UserModel user) {
     Navigator.push(
       context,
-      MaterialPageRoute(builder: (context) => SettingsScreen()),
+      MaterialPageRoute(
+        builder: (context) => UserPaymentHistoryScreen(user: user),
+      ),
+    );
+  }
+
+  void _navigateToSettings(BuildContext context, UserModel user) {
+    Navigator.push(
+      context,
+      MaterialPageRoute(
+        builder: (context) => SettingsScreen(
+          userId: user.userId,
+          userDocId: user.docId,
+          userName: user.name,
+        ),
+      ),
     );
   }
 
@@ -1062,6 +1249,201 @@ class _UserListScreenState extends State<UserListScreen> {
     if (value is num) return value.toInt();
     if (value is String) return int.tryParse(value.trim()) ?? 0;
     return 0;
+  }
+
+  String _customTemplateToEditorText(dynamic raw) {
+    if (raw == null) {
+      return const JsonEncoder.withIndent('  ').convert({
+        'labelSize': '75mm * 50mm',
+        'values': <String, dynamic>{},
+        'elements': <dynamic>[],
+      });
+    }
+    try {
+      if (raw is Map) {
+        return const JsonEncoder.withIndent('  ').convert(raw);
+      }
+      // Migrate the previous admin format, which stored one template in a list.
+      if (raw is List && raw.length == 1 && raw.first is Map) {
+        return const JsonEncoder.withIndent('  ').convert(raw.first);
+      }
+    } catch (_) {}
+    return const JsonEncoder.withIndent('  ').convert({
+      'labelSize': '75mm * 50mm',
+      'values': <String, dynamic>{},
+      'elements': <dynamic>[],
+    });
+  }
+
+  Map<String, dynamic>? _parseCustomTemplateJson(String text) {
+    final trimmed = text.trim();
+    if (trimmed.isEmpty) return null;
+
+    final decoded = jsonDecode(trimmed);
+    dynamic template = decoded;
+    // Accept and migrate the old one-item array shape.
+    if (decoded is List && decoded.length == 1) {
+      template = decoded.first;
+    }
+    if (template is! Map) return null;
+    return Map<String, dynamic>.from(template);
+  }
+
+  Future<void> _showCustomTemplateDialog(UserModel user) async {
+    final ref = await _resolveUserDocRef(user);
+    if (ref == null) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Unable to find user document to update custom template'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    final settingsSnap = await ref.collection('settings').doc('app').get();
+    final settingsData = settingsSnap.data() ?? <String, dynamic>{};
+    final templateController = TextEditingController(
+      text: _customTemplateToEditorText(settingsData['custom_template']),
+    );
+    String? validationError;
+    bool isSaving = false;
+
+    final updated = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            Future<void> save() async {
+              Map<String, dynamic>? parsed;
+              try {
+                parsed = _parseCustomTemplateJson(templateController.text);
+              } catch (e) {
+                setDialogState(() {
+                  validationError = 'Invalid JSON: $e';
+                });
+                return;
+              }
+
+              if (parsed == null) {
+                setDialogState(() {
+                  validationError =
+                      'Custom template must be one JSON object.';
+                });
+                return;
+              }
+
+              if (parsed['elements'] is! List) {
+                setDialogState(() {
+                  validationError =
+                      'Custom template must contain an "elements" array.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                validationError = null;
+                isSaving = true;
+              });
+
+              try {
+                await ref
+                    .collection('settings')
+                    .doc('app')
+                    .set({
+                  'custom_template': parsed,
+                }, SetOptions(merge: true));
+
+                if (Navigator.of(dialogContext).canPop()) {
+                  Navigator.of(dialogContext).pop(true);
+                }
+              } catch (e) {
+                setDialogState(() {
+                  isSaving = false;
+                  validationError = 'Failed to save: $e';
+                });
+              }
+            }
+
+            return AlertDialog(
+              title: Text(
+                'Custom Template - ${user.name ?? 'User'}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+              ),
+              content: SizedBox(
+                width: 640,
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Edit one custom label template JSON object. It must contain an "elements" array.',
+                        style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: templateController,
+                        maxLines: 18,
+                        minLines: 12,
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 13,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Custom template JSON',
+                          hintText: '{\n  "labelSize": "75mm * 50mm",\n  "values": {},\n  "elements": []\n}',
+                          border: OutlineInputBorder(),
+                          alignLabelWithHint: true,
+                        ),
+                      ),
+                      if (validationError != null) ...[
+                        const SizedBox(height: 10),
+                        Text(
+                          validationError!,
+                          style: const TextStyle(color: Colors.red, fontSize: 13),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSaving
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSaving ? null : save,
+                  child: isSaving
+                      ? const SizedBox(
+                          height: 18,
+                          width: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Text('Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    templateController.dispose();
+
+    if (updated == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Custom template saved successfully'),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
   }
 
   Future<void> _showAdditionalSettingsDialog(UserModel user) async {
@@ -1245,27 +1627,59 @@ class _UserListScreenState extends State<UserListScreen> {
   }
 
   Widget _buildSummaryItem(
-    BuildContext context,
     String label,
     String value,
-    IconData icon, [
-    Color? color,
-  ]) {
-    final themeColor = color ?? Theme.of(context).colorScheme.primary;
-    return Column(
-      children: [
-        Icon(icon, color: themeColor, size: 24),
-        const SizedBox(height: 4),
-        Text(
-          value,
-          style: TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.bold,
-            color: themeColor,
+    IconData icon,
+    Color color,
+  ) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: color.withValues(alpha: 0.16)),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 34,
+            height: 34,
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(8),
+            ),
+            child: Icon(icon, color: color, size: 18),
           ),
-        ),
-        Text(label, style: TextStyle(fontSize: 12, color: Colors.grey[600])),
-      ],
+          const SizedBox(width: 10),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(
+                  value,
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                    height: 1.1,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.grey[600],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -1666,18 +2080,18 @@ class _UserListScreenState extends State<UserListScreen> {
 
   Widget _buildInfoRow(String label, String value, [Color? valueColor]) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      padding: const EdgeInsets.symmetric(vertical: 5.0),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           SizedBox(
-            width: 120,
+            width: 128,
             child: Text(
-              '$label:',
+              label,
               style: TextStyle(
-                fontWeight: FontWeight.w500,
-                color: Colors.grey[700],
-                fontSize: 13,
+                fontWeight: FontWeight.w600,
+                color: Colors.grey[600],
+                fontSize: 12,
               ),
             ),
           ),
@@ -1685,8 +2099,9 @@ class _UserListScreenState extends State<UserListScreen> {
             child: Text(
               value,
               style: TextStyle(
-                color: valueColor ?? Colors.black87,
+                color: valueColor ?? AppColors.primaryText,
                 fontSize: 13,
+                fontWeight: FontWeight.w500,
               ),
             ),
           ),

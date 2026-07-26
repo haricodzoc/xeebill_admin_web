@@ -1,767 +1,917 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
 import '../utils/app_colors.dart';
-import '../utils/constants.dart';
-import '../utils/functions.dart';
+
+enum _NotifyStatus {
+  idle,
+  loadingUsers,
+  updating,
+  completed,
+  failed,
+}
+
+class _SelectableUser {
+  final String id;
+  final String name;
+  final String email;
+  final String phone;
+  bool selected;
+
+  _SelectableUser({
+    required this.id,
+    required this.name,
+    required this.email,
+    required this.phone,
+    this.selected = false,
+  });
+
+  String get label {
+    if (name.isNotEmpty) return name;
+    if (email.isNotEmpty) return email;
+    return id;
+  }
+
+  String get subtitle {
+    final parts = <String>[
+      if (email.isNotEmpty) email,
+      if (phone.isNotEmpty) phone,
+    ];
+    return parts.isEmpty ? id : parts.join('  ·  ');
+  }
+}
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({super.key});
+  final String? userId;
+  final String? userDocId;
+  final String? userName;
+
+  const SettingsScreen({
+    super.key,
+    this.userId,
+    this.userDocId,
+    this.userName,
+  });
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
 class _SettingsScreenState extends State<SettingsScreen> {
-  String _gstType = 'Regular';
-  String _labelSize = '38mm * 25mm';
-  bool _enableHsn = false;
-  bool _showTaxOnBill = false;
-  bool _taxToggle = false;
-  bool _applyRoundOff = true;
-  bool _adminMode = true;
-  String? _adminPin;
-  bool isUpdatingSettings = false;
-  String _taxRateType = 'Inclusive';
-  double _compositionTaxRate = 1.0;
+  bool _isLoading = true;
+  String? _loadError;
+  DateTime _taxRateUpdatedOn = DateTime.now();
+
+  final TextEditingController _searchController = TextEditingController();
+  List<_SelectableUser> _users = [];
+  String _searchQuery = '';
+
+  _NotifyStatus _status = _NotifyStatus.idle;
+  int _progressDone = 0;
+  int _progressTotal = 0;
+  int _successCount = 0;
+  int _failedCount = 0;
+  String _currentUserLabel = '';
+  String _statusMessage = 'Select users, then send notification';
+
+  bool get _isSending =>
+      _status == _NotifyStatus.loadingUsers ||
+      _status == _NotifyStatus.updating;
+
+  List<_SelectableUser> get _filteredUsers {
+    final q = _searchQuery.trim().toLowerCase();
+    if (q.isEmpty) return _users;
+    return _users.where((u) {
+      return u.name.toLowerCase().contains(q) ||
+          u.email.toLowerCase().contains(q) ||
+          u.phone.toLowerCase().contains(q) ||
+          u.id.toLowerCase().contains(q);
+    }).toList();
+  }
+
+  List<_SelectableUser> get _selectedUsers =>
+      _users.where((u) => u.selected).toList();
+
+  int get _selectedCount => _selectedUsers.length;
+
+  bool get _allFilteredSelected {
+    final filtered = _filteredUsers;
+    return filtered.isNotEmpty && filtered.every((u) => u.selected);
+  }
 
   @override
   void initState() {
     super.initState();
+    _searchController.addListener(() {
+      setState(() => _searchQuery = _searchController.text);
+    });
     _loadSettings();
   }
 
+  @override
+  void dispose() {
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  DateTime? _parseDate(dynamic value) {
+    if (value == null) return null;
+    if (value is Timestamp) return value.toDate();
+    if (value is DateTime) return value;
+    if (value is String) return DateTime.tryParse(value);
+    if (value is int) return DateTime.fromMillisecondsSinceEpoch(value);
+    return null;
+  }
+
   Future<void> _loadSettings() async {
+    setState(() {
+      _isLoading = true;
+      _loadError = null;
+    });
     try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        final settingsDoc = await FirebaseFirestore.instance
+      final preferredDocId = widget.userDocId?.trim() ?? '';
+      final usersSnap =
+          await FirebaseFirestore.instance.collection('users').get();
+
+      final users = usersSnap.docs.map((doc) {
+        final data = doc.data();
+        return _SelectableUser(
+          id: doc.id,
+          name: (data['name'] ?? '').toString().trim(),
+          email: (data['email'] ?? '').toString().trim(),
+          phone: (data['phone'] ?? '').toString().trim(),
+          selected: preferredDocId.isNotEmpty && doc.id == preferredDocId,
+        );
+      }).toList()
+        ..sort((a, b) => a.label.toLowerCase().compareTo(b.label.toLowerCase()));
+
+      _users = users;
+
+      // Prefill date from preferred user, else first selected/existing flag.
+      DocumentSnapshot<Map<String, dynamic>>? settingsDoc;
+      final seedId = preferredDocId.isNotEmpty
+          ? preferredDocId
+          : (users.isNotEmpty ? users.first.id : null);
+      if (seedId != null) {
+        settingsDoc = await FirebaseFirestore.instance
             .collection('users')
-            .doc(user.uid)
+            .doc(seedId)
             .collection('settings')
             .doc('app')
             .get();
+      }
 
-        if (settingsDoc.exists) {
-          final data = settingsDoc.data()!;
-          setState(() {
-            _gstType = data['gstType'] ?? 'Regular';
-            _labelSize = data['labelSize'] ?? '38mm * 25mm';
-            _enableHsn = data['enableHsn'] ?? false;
-            _showTaxOnBill = data['showTaxOnBill'] ?? false;
-            _taxToggle = data['taxToggle'] ?? false;
-            _applyRoundOff = data['applyRoundOff'] ?? true;
-            _adminMode = data['adminMode'] ?? true;
-            _taxRateType = data['taxRateType'] ?? 'Inclusive';
-            _compositionTaxRate = (data['compositionTaxRate'] ?? 1.0)
-                .toDouble();
-          });
-        } else {
-          // Initialize from constants
-          setState(() {
-            _gstType = GST_TYPE == GstType.regular
-                ? 'Regular'
-                : (GST_TYPE == GstType.composite
-                      ? 'Composition'
-                      : 'Unregistered');
-            _labelSize = LABEL_SIZE;
-            _enableHsn = ENABLE_HSN;
-            _showTaxOnBill = SHOW_TAX_ON_BILL;
-            _applyRoundOff = APPLY_ROUND_OFF;
-            _taxToggle = TAX_TOGGLE;
-            _adminMode = ADMIN_MODE;
-            _taxRateType = TAX_RATE_INCLUSIVE ? 'Inclusive' : 'Exclusive';
-            _compositionTaxRate = GSTR_CMP_TAX_PERC;
-          });
-        }
-
-        // Load admin PIN
-        final pinDoc = await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('settings')
-            .doc('admin_pin')
-            .get();
-
-        if (pinDoc.exists) {
-          setState(() {
-            _adminPin = pinDoc.data()?['pin'] as String?;
-          });
+      if (settingsDoc != null &&
+          settingsDoc.exists &&
+          settingsDoc.data() != null) {
+        final existing = _parseDate(
+          settingsDoc.data()!['tax_rate_updated_date'] ??
+              settingsDoc.data()!['taxRateUpdatedDate'],
+        );
+        if (existing != null) {
+          _taxRateUpdatedOn = DateTime(
+            existing.year,
+            existing.month,
+            existing.day,
+          );
         }
       }
-    } catch (e) {
-      await logErrorToFile(e.toString(), StackTrace.current);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error loading settings: $e')));
-      }
-    }
-  }
 
-  Future<void> _setAdminPin(String pin) async {
-    try {
-      final user = FirebaseAuth.instance.currentUser;
-      if (user != null) {
-        await FirebaseFirestore.instance
-            .collection('users')
-            .doc(user.uid)
-            .collection('settings')
-            .doc('admin_pin')
-            .set({'pin': pin});
-        setState(() {
-          _adminPin = pin;
-        });
-      }
+      _statusMessage = users.isEmpty
+          ? 'No users found'
+          : preferredDocId.isNotEmpty && _selectedCount == 1
+              ? '1 user preselected — add more or send'
+              : 'Select users, then send notification';
     } catch (e) {
-      await logErrorToFile(e.toString(), StackTrace.current);
-      if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error setting PIN: $e')));
-      }
-    }
-  }
-
-  Future<void> _showSetPinDialog({bool isReset = false}) async {
-    final pinController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    bool? result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text(
-          isReset ? 'Reset Admin PIN' : 'Set Admin PIN',
-          style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        content: Form(
-          key: formKey,
-          child: TextFormField(
-            controller: pinController,
-            keyboardType: TextInputType.number,
-            obscureText: true,
-            maxLength: 6,
-            decoration: const InputDecoration(
-              hintText: 'Enter a PIN (min 4 digits)',
-              border: OutlineInputBorder(),
-            ),
-            validator: (val) {
-              if (val == null || val.length < 4) {
-                return 'Enter at least 4 digits';
-              }
-              return null;
-            },
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (formKey.currentState!.validate()) {
-                Navigator.pop(context, true);
-              }
-            },
-            child: Text(isReset ? 'Reset PIN' : 'Set PIN'),
-          ),
-        ],
-      ),
-    );
-    if (result == true) {
-      await _setAdminPin(pinController.text);
-      if (!isReset) {
-        setState(() {
-          _adminMode = false;
-        });
-      }
+      _loadError = 'Error loading users: $e';
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text(
-              isReset ? 'PIN reset successfully' : 'PIN set successfully',
-            ),
-          ),
+          SnackBar(content: Text(_loadError!)),
         );
       }
-    } else if (!isReset) {
-      // If cancelled, revert the switch
-      setState(() {
-        _adminMode = true;
-      });
+    } finally {
+      if (mounted) setState(() => _isLoading = false);
     }
   }
 
-  Future<void> _showVerifyPinDialog() async {
-    final pinController = TextEditingController();
-    bool? result = await showDialog<bool>(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: const Text(
-          'Enter Admin PIN',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        content: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            TextFormField(
-              controller: pinController,
-              keyboardType: TextInputType.number,
-              obscureText: true,
-              maxLength: 6,
-              decoration: const InputDecoration(
-                hintText: 'Enter your PIN',
-                border: OutlineInputBorder(),
-              ),
-            ),
-            const SizedBox(height: 8),
-            Align(
-              alignment: Alignment.centerRight,
-              child: GestureDetector(
-                onTap: () async {
-                  Navigator.pop(context); // Close PIN dialog
-                  await _showResetPinDialog();
-                },
-                child: Text(
-                  "Forgot PIN? Reset",
-                  style: TextStyle(
-                    color: AppColors.primaryGreen,
-                    decoration: TextDecoration.underline,
-                    fontSize: 13,
-                  ),
-                ),
-              ),
-            ),
-          ],
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(context, false),
-            child: const Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              if (pinController.text == _adminPin) {
-                Navigator.pop(context, true);
-              } else {
-                ScaffoldMessenger.of(
-                  context,
-                ).showSnackBar(const SnackBar(content: Text('Incorrect PIN')));
-              }
-            },
-            child: const Text('Verify'),
-          ),
-        ],
-      ),
-    );
-    if (result == true) {
+  void _selectAllFiltered() {
+    setState(() {
+      for (final u in _filteredUsers) {
+        u.selected = true;
+      }
+      _statusMessage = '$_selectedCount user${_selectedCount == 1 ? '' : 's'} selected';
+    });
+  }
+
+  void _clearSelection() {
+    setState(() {
+      for (final u in _users) {
+        u.selected = false;
+      }
+      _statusMessage = 'Select users, then send notification';
+    });
+  }
+
+  void _toggleSelectAllFiltered() {
+    if (_allFilteredSelected) {
       setState(() {
-        _adminMode = true;
+        for (final u in _filteredUsers) {
+          u.selected = false;
+        }
+        _statusMessage = '$_selectedCount user${_selectedCount == 1 ? '' : 's'} selected';
       });
     } else {
-      setState(() {
-        _adminMode = false;
-      });
+      _selectAllFiltered();
     }
   }
 
-  Future<void> _showResetPinDialog() async {
-    final passwordController = TextEditingController();
-    final formKey = GlobalKey<FormState>();
-    await showDialog<bool>(
+  Future<void> _pickDate() async {
+    final picked = await showDatePicker(
       context: context,
-      builder: (context) => AlertDialog(
-        title: const Text(
-          'Reset PIN',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+      initialDate: _taxRateUpdatedOn,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(2100),
+      helpText: 'Tax rate updated on',
+    );
+    if (picked == null || !mounted) return;
+    setState(() {
+      _taxRateUpdatedOn = DateTime(picked.year, picked.month, picked.day);
+    });
+  }
+
+  Future<void> _sendNotificationNow() async {
+    final targets = _selectedUsers;
+    if (targets.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select at least one user'),
+          backgroundColor: Colors.orange,
         ),
-        content: Form(
-          key: formKey,
-          child: TextFormField(
-            controller: passwordController,
-            obscureText: true,
-            decoration: const InputDecoration(
-              hintText: 'Enter your account password',
-              border: OutlineInputBorder(),
-            ),
-            validator: (val) {
-              if (val == null || val.isEmpty) {
-                return 'Password required';
-              }
-              return null;
-            },
-          ),
+      );
+      return;
+    }
+
+    final dateLabel = DateFormat('dd MMM yyyy').format(_taxRateUpdatedOn);
+    final isAll = targets.length == _users.length;
+    final confirm = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(isAll ? 'Notify all users?' : 'Notify selected users?'),
+        content: Text(
+          isAll
+              ? 'Set tax_rate_updated and tax_rate_updated_date ($dateLabel) '
+                  'for all ${_users.length} users.'
+              : 'Set tax_rate_updated and tax_rate_updated_date ($dateLabel) '
+                  'for ${targets.length} selected user'
+                  '${targets.length == 1 ? '' : 's'}.',
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.pop(context, false),
+            onPressed: () => Navigator.pop(ctx, false),
             child: const Text('Cancel'),
           ),
           ElevatedButton(
-            onPressed: () async {
-              if (formKey.currentState!.validate()) {
-                try {
-                  final user = FirebaseAuth.instance.currentUser;
-                  final cred = EmailAuthProvider.credential(
-                    email: user!.email!,
-                    password: passwordController.text,
-                  );
-                  await user.reauthenticateWithCredential(cred);
-                  Navigator.pop(context, true);
-                  await _showSetPinDialog(isReset: true);
-                } catch (e) {
-                  await logErrorToFile(e.toString(), StackTrace.current);
-                  if (mounted) {
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(content: Text('Password incorrect')),
-                    );
-                  }
-                }
-              }
-            },
-            child: const Text('Verify & Reset'),
+            onPressed: () => Navigator.pop(ctx, true),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: AppColors.primaryGreen,
+              foregroundColor: Colors.white,
+            ),
+            child: Text(isAll ? 'Send to all' : 'Send to selected'),
           ),
         ],
       ),
     );
-    // No need to handle result here, _showSetPinDialog will be called on success
+    if (confirm != true || !mounted) return;
+
+    setState(() {
+      _status = _NotifyStatus.updating;
+      _progressDone = 0;
+      _progressTotal = targets.length;
+      _successCount = 0;
+      _failedCount = 0;
+      _currentUserLabel = '';
+      _statusMessage = 'Updating 0 of ${targets.length}…';
+    });
+
+    try {
+      final dateOnly = DateTime(
+        _taxRateUpdatedOn.year,
+        _taxRateUpdatedOn.month,
+        _taxRateUpdatedOn.day,
+      );
+      final payload = <String, dynamic>{
+        'tax_rate_updated': true,
+        'tax_rate_updated_date': Timestamp.fromDate(dateOnly),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      const chunkSize = 25;
+      for (var start = 0; start < targets.length; start += chunkSize) {
+        final end = (start + chunkSize).clamp(0, targets.length);
+        final chunk = targets.sublist(start, end);
+        final batch = FirebaseFirestore.instance.batch();
+
+        for (final user in chunk) {
+          batch.set(
+            FirebaseFirestore.instance
+                .collection('users')
+                .doc(user.id)
+                .collection('settings')
+                .doc('app'),
+            payload,
+            SetOptions(merge: true),
+          );
+        }
+
+        if (!mounted) return;
+        setState(() {
+          _currentUserLabel = chunk.last.label;
+          _statusMessage =
+              'Updating ${start + 1}–$end of ${targets.length}…';
+        });
+
+        try {
+          await batch.commit();
+          if (!mounted) return;
+          setState(() {
+            _successCount += chunk.length;
+            _progressDone = end;
+            _statusMessage =
+                'Updated $_progressDone of $_progressTotal users…';
+          });
+        } catch (_) {
+          for (final user in chunk) {
+            if (!mounted) return;
+            setState(() {
+              _currentUserLabel = user.label;
+              _statusMessage =
+                  'Retrying ${_progressDone + 1} of $_progressTotal…';
+            });
+            try {
+              await FirebaseFirestore.instance
+                  .collection('users')
+                  .doc(user.id)
+                  .collection('settings')
+                  .doc('app')
+                  .set(payload, SetOptions(merge: true));
+              if (!mounted) return;
+              setState(() {
+                _successCount++;
+                _progressDone++;
+              });
+            } catch (_) {
+              if (!mounted) return;
+              setState(() {
+                _failedCount++;
+                _progressDone++;
+              });
+            }
+          }
+          if (!mounted) return;
+          setState(() {
+            _statusMessage =
+                'Updated $_progressDone of $_progressTotal users…';
+          });
+        }
+
+        await Future<void>.delayed(const Duration(milliseconds: 16));
+      }
+
+      if (!mounted) return;
+      final ok = _failedCount == 0;
+      setState(() {
+        _status = ok ? _NotifyStatus.completed : _NotifyStatus.failed;
+        _currentUserLabel = '';
+        _statusMessage = ok
+            ? 'Completed: updated $_successCount users'
+            : 'Finished with errors: $_successCount updated, $_failedCount failed';
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(_statusMessage),
+          backgroundColor: ok ? Colors.green : Colors.orange,
+        ),
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _status = _NotifyStatus.failed;
+        _statusMessage = 'Failed: $e';
+      });
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to send notification: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Color _statusColor() {
+    switch (_status) {
+      case _NotifyStatus.idle:
+        return AppColors.primaryGrey;
+      case _NotifyStatus.loadingUsers:
+      case _NotifyStatus.updating:
+        return AppColors.primaryGreen;
+      case _NotifyStatus.completed:
+        return AppColors.successGreen;
+      case _NotifyStatus.failed:
+        return AppColors.primaryRed;
+    }
+  }
+
+  String _statusTitle() {
+    switch (_status) {
+      case _NotifyStatus.idle:
+        return 'Idle';
+      case _NotifyStatus.loadingUsers:
+        return 'Loading users';
+      case _NotifyStatus.updating:
+        return 'In progress';
+      case _NotifyStatus.completed:
+        return 'Completed';
+      case _NotifyStatus.failed:
+        return 'Failed / Partial';
+    }
+  }
+
+  Widget _buildStatusPanel() {
+    final progress = _progressTotal <= 0
+        ? null
+        : (_progressDone / _progressTotal).clamp(0.0, 1.0);
+    final color = _statusColor();
+    final percent = progress == null ? null : (progress * 100).round();
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withValues(alpha: 0.22)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                width: 8,
+                height: 8,
+                decoration: BoxDecoration(color: color, shape: BoxShape.circle),
+              ),
+              const SizedBox(width: 8),
+              Text(
+                'STATUS: ${_statusTitle().toUpperCase()}',
+                style: TextStyle(
+                  fontSize: 11,
+                  letterSpacing: 0.6,
+                  fontWeight: FontWeight.w700,
+                  color: color,
+                ),
+              ),
+              const Spacer(),
+              if (percent != null)
+                Text(
+                  '$percent%',
+                  style: TextStyle(
+                    fontSize: 12,
+                    fontWeight: FontWeight.w700,
+                    color: color,
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: _isSending ? progress : (progress ?? 0),
+              minHeight: 10,
+              backgroundColor: Colors.white,
+              color: color,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            _statusMessage,
+            style: TextStyle(
+              fontSize: 13,
+              fontWeight: FontWeight.w600,
+              color: AppColors.primaryText,
+            ),
+          ),
+          if (_currentUserLabel.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Current: $_currentUserLabel',
+              style: TextStyle(fontSize: 12, color: Colors.grey[700]),
+            ),
+          ],
+          if (_progressTotal > 0) ...[
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: [
+                _statChip('Total', '$_progressTotal', AppColors.primaryGrey),
+                _statChip('Done', '$_progressDone', AppColors.primaryGreen),
+                _statChip('Success', '$_successCount', AppColors.successGreen),
+                if (_failedCount > 0)
+                  _statChip('Failed', '$_failedCount', AppColors.primaryRed),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _statChip(String label, String value, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: color.withValues(alpha: 0.25)),
+      ),
+      child: Text(
+        '$label: $value',
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w700,
+          color: color,
+        ),
+      ),
+    );
+  }
+
+  Widget _buildUserPicker() {
+    final filtered = _filteredUsers;
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFFF8F9FB),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: const Color(0xFFE8ECF0)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Text(
+                      'USERS',
+                      style: TextStyle(
+                        fontSize: 11,
+                        letterSpacing: 0.6,
+                        fontWeight: FontWeight.w700,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                    const Spacer(),
+                    Text(
+                      '$_selectedCount selected / ${_users.length}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: AppColors.primaryGreen,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                TextField(
+                  controller: _searchController,
+                  enabled: !_isSending,
+                  decoration: InputDecoration(
+                    hintText: 'Search name, email, phone, id…',
+                    isDense: true,
+                    prefixIcon: const Icon(Icons.search_rounded, size: 20),
+                    suffixIcon: _searchQuery.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear_rounded, size: 18),
+                            onPressed: () {
+                              _searchController.clear();
+                            },
+                          )
+                        : null,
+                    filled: true,
+                    fillColor: Colors.white,
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFE8ECF0)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(10),
+                      borderSide: const BorderSide(color: Color(0xFFE8ECF0)),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    OutlinedButton.icon(
+                      onPressed: _isSending ? null : _toggleSelectAllFiltered,
+                      icon: Icon(
+                        _allFilteredSelected
+                            ? Icons.deselect
+                            : Icons.select_all,
+                        size: 16,
+                      ),
+                      label: Text(
+                        _allFilteredSelected
+                            ? 'Clear filtered'
+                            : 'Select filtered',
+                      ),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _isSending || _users.isEmpty
+                          ? null
+                          : () {
+                              setState(() {
+                                for (final u in _users) {
+                                  u.selected = true;
+                                }
+                                _statusMessage =
+                                    '$_selectedCount users selected';
+                              });
+                            },
+                      icon: const Icon(Icons.done_all, size: 16),
+                      label: const Text('Select all'),
+                    ),
+                    OutlinedButton.icon(
+                      onPressed: _isSending || _selectedCount == 0
+                          ? null
+                          : _clearSelection,
+                      icon: const Icon(Icons.clear_all, size: 16),
+                      label: const Text('Clear'),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Divider(height: 1),
+          SizedBox(
+            height: 280,
+            child: filtered.isEmpty
+                ? Center(
+                    child: Text(
+                      'No users match your search',
+                      style: TextStyle(color: Colors.grey[600]),
+                    ),
+                  )
+                : ListView.separated(
+                    itemCount: filtered.length,
+                    separatorBuilder: (_, _) =>
+                        const Divider(height: 1, color: Color(0xFFE8ECF0)),
+                    itemBuilder: (context, index) {
+                      final user = filtered[index];
+                      return CheckboxListTile(
+                        value: user.selected,
+                        dense: true,
+                        enabled: !_isSending,
+                        controlAffinity: ListTileControlAffinity.leading,
+                        activeColor: AppColors.primaryGreen,
+                        title: Text(
+                          user.label,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w600,
+                            fontSize: 13.5,
+                          ),
+                        ),
+                        subtitle: Text(
+                          user.subtitle,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: TextStyle(
+                            fontSize: 12,
+                            color: Colors.grey[600],
+                          ),
+                        ),
+                        onChanged: _isSending
+                            ? null
+                            : (val) {
+                                setState(() {
+                                  user.selected = val ?? false;
+                                  _statusMessage = _selectedCount == 0
+                                      ? 'Select users, then send notification'
+                                      : '$_selectedCount user${_selectedCount == 1 ? '' : 's'} selected';
+                                });
+                              },
+                      );
+                    },
+                  ),
+          ),
+        ],
+      ),
+    );
   }
 
   @override
   Widget build(BuildContext context) {
-    final currentGstType = _gstType == "Regular"
-        ? GstType.regular
-        : (_gstType == "Composition"
-              ? GstType.composite
-              : GstType.unregistered);
+    final titleName = (widget.userName ?? '').trim();
 
     return Scaffold(
+      backgroundColor: const Color(0xFFF3F5F7),
       appBar: AppBar(
-        title: const Text(
-          'Settings',
-          style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
-        ),
-        backgroundColor: AppColors.backgroundGrey,
         elevation: 0,
-        iconTheme: IconThemeData(color: AppColors.primaryGreen),
-      ),
-      body: ListView(
-        padding: const EdgeInsets.all(18),
-        children: [
-          Card(
-            color: Colors.white,
-            elevation: 3,
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(14),
-              side: BorderSide(
-                color: AppColors.primaryGreen.withOpacity(0.13),
-                width: 1,
-              ),
+        backgroundColor: Colors.white,
+        foregroundColor: AppColors.primaryText,
+        title: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text(
+              'Settings',
+              style: TextStyle(fontWeight: FontWeight.w700),
             ),
-            child: Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 18, vertical: 18),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  _adminMode == true
-                      ? Column(
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Text(
-                              'GST Type',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.primaryGrey,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String>(
-                              value: _gstType,
-                              items: const [
-                                DropdownMenuItem(
-                                  value: 'Regular',
-                                  child: Text('Regular'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Composition',
-                                  child: Text('Composition'),
-                                ),
-                                DropdownMenuItem(
-                                  value: 'Unregistered',
-                                  child: Text('Unregistered'),
-                                ),
-                              ],
-                              onChanged: (val) {
-                                setState(() {
-                                  _gstType = val!;
-                                });
-                              },
-                              decoration: InputDecoration(
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color: AppColors.activeGreen.withOpacity(
-                                      0.18,
-                                    ),
-                                  ),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                            ),
-                            const SizedBox(height: 18),
-                            Text(
-                              'Label size',
-                              style: TextStyle(
-                                fontSize: 14,
-                                color: AppColors.primaryGrey,
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            DropdownButtonFormField<String>(
-                              value: _labelSize,
-                              items: const [
-                                DropdownMenuItem(
-                                  value: '38mm * 25mm',
-                                  child: Text('38mm * 25mm'),
-                                ),
-                                DropdownMenuItem(
-                                  value: '50mm * 25mm',
-                                  child: Text('50mm * 25mm'),
-                                ),
-                                DropdownMenuItem(
-                                  value: '50mm * 38mm',
-                                  child: Text('50mm * 38mm'),
-                                ),
-                              ],
-                              onChanged: (val) {
-                                setState(() {
-                                  _labelSize = val!;
-                                });
-                              },
-                              decoration: InputDecoration(
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(10),
-                                  borderSide: BorderSide(
-                                    color: AppColors.activeGreen.withOpacity(
-                                      0.18,
-                                    ),
-                                  ),
-                                ),
-                                contentPadding: const EdgeInsets.symmetric(
-                                  horizontal: 12,
-                                  vertical: 8,
-                                ),
-                              ),
-                            ),
-                            if (currentGstType == GstType.regular)
-                              Column(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 18),
-                                  Text(
-                                    'Tax Rate Type',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.primaryGrey,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  DropdownButtonFormField<String>(
-                                    value: _taxRateType,
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: 'Inclusive',
-                                        child: Text('Inclusive'),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 'Exclusive',
-                                        child: Text('Exclusive'),
-                                      ),
-                                    ],
-                                    onChanged: (val) {
-                                      setState(() {
-                                        _taxRateType = val!;
-                                      });
-                                    },
-                                    decoration: InputDecoration(
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                        borderSide: BorderSide(
-                                          color: AppColors.activeGreen
-                                              .withOpacity(0.18),
-                                        ),
-                                      ),
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 8,
-                                          ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            if (currentGstType == GstType.composite)
-                              Column(
-                                mainAxisAlignment: MainAxisAlignment.start,
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: [
-                                  const SizedBox(height: 18),
-                                  Text(
-                                    'Composition Tax Rate (%)',
-                                    style: TextStyle(
-                                      fontSize: 14,
-                                      color: AppColors.primaryGrey,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 10),
-                                  DropdownButtonFormField<double>(
-                                    value: _compositionTaxRate,
-                                    items: const [
-                                      DropdownMenuItem(
-                                        value: 1.0,
-                                        child: Text('1%'),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 5.0,
-                                        child: Text('5%'),
-                                      ),
-                                      DropdownMenuItem(
-                                        value: 6.0,
-                                        child: Text('6%'),
-                                      ),
-                                    ],
-                                    onChanged: (val) {
-                                      setState(() {
-                                        _compositionTaxRate = val!;
-                                      });
-                                    },
-                                    decoration: InputDecoration(
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(10),
-                                        borderSide: BorderSide(
-                                          color: AppColors.activeGreen
-                                              .withOpacity(0.18),
-                                        ),
-                                      ),
-                                      contentPadding:
-                                          const EdgeInsets.symmetric(
-                                            horizontal: 12,
-                                            vertical: 8,
-                                          ),
-                                    ),
-                                  ),
-                                ],
-                              ),
-                            const SizedBox(height: 18),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                'Apply round off',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.primaryGrey,
-                                ),
-                              ),
-                              activeColor: AppColors.activeGreen,
-                              value: _applyRoundOff,
-                              onChanged: (val) {
-                                setState(() {
-                                  _applyRoundOff = val;
-                                });
-                              },
-                            ),
-                            if (currentGstType != GstType.composite)
-                              SwitchListTile(
-                                contentPadding: EdgeInsets.zero,
-                                title: Text(
-                                  'Tax Toggle',
-                                  style: TextStyle(
-                                    fontSize: 14,
-                                    color: AppColors.primaryGrey,
-                                  ),
-                                ),
-                                activeColor: AppColors.activeGreen,
-                                value: _taxToggle,
-                                onChanged: (val) {
-                                  setState(() {
-                                    _taxToggle = val;
-                                  });
-                                },
-                              ),
-                            const SizedBox(height: 8),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                'Enable HSN',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.primaryGrey,
-                                ),
-                              ),
-                              activeColor: AppColors.activeGreen,
-                              value: _enableHsn,
-                              onChanged: (val) {
-                                setState(() {
-                                  _enableHsn = val;
-                                });
-                              },
-                            ),
-                            SwitchListTile(
-                              contentPadding: EdgeInsets.zero,
-                              title: Text(
-                                'Show Tax on Bill',
-                                style: TextStyle(
-                                  fontSize: 14,
-                                  color: AppColors.primaryGrey,
-                                ),
-                              ),
-                              activeColor: AppColors.activeGreen,
-                              value: _showTaxOnBill,
-                              onChanged: (val) {
-                                setState(() {
-                                  _showTaxOnBill = val;
-                                });
-                              },
-                            ),
-                          ],
-                        )
-                      : Container(),
-                  SwitchListTile(
-                    contentPadding: EdgeInsets.zero,
-                    title: Text(
-                      'Admin Mode',
-                      style: TextStyle(
-                        fontSize: 14,
-                        color: AppColors.primaryGrey,
-                      ),
-                    ),
-                    activeColor: AppColors.activeGreen,
-                    value: _adminMode,
-                    onChanged: (val) async {
-                      if (!val) {
-                        // Disabling: only ask for PIN if not set
-                        if (_adminPin == null || _adminPin!.isEmpty) {
-                          await _showSetPinDialog();
-                        } else {
-                          setState(() {
-                            _adminMode = false;
-                          });
-                        }
-                      } else {
-                        // Enabling: verify PIN
-                        await _showVerifyPinDialog();
-                      }
-                    },
-                  ),
-                ],
-              ),
-            ),
-          ),
-          Padding(
-            padding: const EdgeInsets.all(8.0),
-            child: ElevatedButton(
-              onPressed: isUpdatingSettings
-                  ? null
-                  : () async {
-                      try {
-                        setState(() {
-                          isUpdatingSettings = true;
-                        });
-                        final user = FirebaseAuth.instance.currentUser;
-                        if (user != null) {
-                          await FirebaseFirestore.instance
-                              .collection('users')
-                              .doc(user.uid)
-                              .collection('settings')
-                              .doc('app')
-                              .set({
-                                'gstType': _gstType,
-                                'labelSize': _labelSize,
-                                'taxToggle': _taxToggle,
-                                'enableHsn': _enableHsn,
-                                'showTaxOnBill': _showTaxOnBill,
-                                'applyRoundOff': _applyRoundOff,
-                                'adminMode': _adminMode,
-                                'taxRateType': _taxRateType,
-                                'compositionTaxRate': _compositionTaxRate,
-                              }, SetOptions(merge: true));
-
-                          // Update constants
-                          GST_TYPE = _gstType == "Regular"
-                              ? GstType.regular
-                              : (_gstType == "Composition"
-                                    ? GstType.composite
-                                    : GstType.unregistered);
-                          LABEL_SIZE = _labelSize;
-                          ENABLE_HSN = _enableHsn;
-                          TAX_TOGGLE = _taxToggle;
-                          SHOW_TAX_ON_BILL = _showTaxOnBill;
-                          APPLY_ROUND_OFF = _applyRoundOff;
-                          ADMIN_MODE = _adminMode;
-                          TAX_RATE_INCLUSIVE = _taxRateType == 'Inclusive';
-                          GSTR_CMP_TAX_PERC = _compositionTaxRate;
-
-                          if (mounted) {
-                            ScaffoldMessenger.of(context).showSnackBar(
-                              const SnackBar(
-                                content: Text('Settings saved successfully'),
-                                backgroundColor: Colors.green,
-                              ),
-                            );
-                            Navigator.pop(context);
-                          }
-                        }
-                      } catch (e) {
-                        await logErrorToFile(e.toString(), StackTrace.current);
-                        if (mounted) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Error saving settings: $e'),
-                            ),
-                          );
-                        }
-                      } finally {
-                        if (mounted) {
-                          setState(() {
-                            isUpdatingSettings = false;
-                          });
-                        }
-                      }
-                    },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryGreen,
-                foregroundColor: Colors.white,
-                padding: const EdgeInsets.symmetric(vertical: 16),
-                shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10),
+            if (titleName.isNotEmpty)
+              Text(
+                titleName,
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[600],
                 ),
               ),
-              child: isUpdatingSettings
-                  ? const SizedBox(
-                      height: 20,
-                      width: 20,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                        valueColor: AlwaysStoppedAnimation<Color>(Colors.white),
-                      ),
-                    )
-                  : const Text(
-                      'Save Changes',
-                      style: TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-            ),
+          ],
+        ),
+        actions: [
+          IconButton(
+            tooltip: 'Refresh',
+            onPressed: _isLoading || _isSending ? null : _loadSettings,
+            icon: const Icon(Icons.refresh_rounded),
           ),
         ],
       ),
-      backgroundColor: AppColors.backgroundGrey,
+      body: _isLoading
+          ? const Center(child: CircularProgressIndicator())
+          : _loadError != null
+              ? Center(
+                  child: Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(
+                          _loadError!,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(color: Colors.grey[700]),
+                        ),
+                        const SizedBox(height: 16),
+                        ElevatedButton(
+                          onPressed: _loadSettings,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Retry'),
+                        ),
+                      ],
+                    ),
+                  ),
+                )
+              : ListView(
+                  padding: const EdgeInsets.all(20),
+                  children: [
+                    Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 720),
+                        child: Card(
+                          elevation: 0,
+                          shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(14),
+                            side: const BorderSide(color: Color(0xFFE6E9ED)),
+                          ),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(20, 20, 20, 24),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.stretch,
+                              children: [
+                                Text(
+                                  'TAX RATE UPDATE',
+                                  style: TextStyle(
+                                    fontSize: 11,
+                                    letterSpacing: 0.7,
+                                    fontWeight: FontWeight.w700,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                Text(
+                                  'Tax rate updated on',
+                                  style: TextStyle(
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.w600,
+                                    color: AppColors.primaryText,
+                                  ),
+                                ),
+                                const SizedBox(height: 8),
+                                InkWell(
+                                  onTap: _isSending ? null : _pickDate,
+                                  borderRadius: BorderRadius.circular(10),
+                                  child: InputDecorator(
+                                    decoration: InputDecoration(
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                        borderSide: const BorderSide(
+                                          color: Color(0xFFE8ECF0),
+                                        ),
+                                      ),
+                                      suffixIcon: const Icon(
+                                        Icons.calendar_today_outlined,
+                                      ),
+                                      contentPadding:
+                                          const EdgeInsets.symmetric(
+                                        horizontal: 14,
+                                        vertical: 14,
+                                      ),
+                                    ),
+                                    child: Text(
+                                      DateFormat('dd MMM yyyy')
+                                          .format(_taxRateUpdatedOn),
+                                      style: TextStyle(
+                                        fontSize: 15,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.primaryText,
+                                      ),
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 16),
+                                _buildUserPicker(),
+                                const SizedBox(height: 16),
+                                _buildStatusPanel(),
+                                const SizedBox(height: 20),
+                                SizedBox(
+                                  height: 46,
+                                  child: ElevatedButton.icon(
+                                    onPressed: _isSending ||
+                                            _selectedCount == 0
+                                        ? null
+                                        : _sendNotificationNow,
+                                    style: ElevatedButton.styleFrom(
+                                      backgroundColor: AppColors.primaryGreen,
+                                      foregroundColor: Colors.white,
+                                      disabledBackgroundColor:
+                                          Colors.grey.shade300,
+                                      shape: RoundedRectangleBorder(
+                                        borderRadius: BorderRadius.circular(10),
+                                      ),
+                                    ),
+                                    icon: _isSending
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(
+                                              strokeWidth: 2,
+                                              color: Colors.white,
+                                            ),
+                                          )
+                                        : const Icon(
+                                            Icons.notifications_active_outlined,
+                                          ),
+                                    label: Text(
+                                      _isSending
+                                          ? 'Sending…'
+                                          : _selectedCount == 0
+                                              ? 'Select users to send'
+                                              : _selectedCount == _users.length
+                                                  ? 'Send notification to all ($_selectedCount)'
+                                                  : 'Send notification ($_selectedCount selected)',
+                                    ),
+                                  ),
+                                ),
+                                const SizedBox(height: 12),
+                                Text(
+                                  'Writes tax_rate_updated and tax_rate_updated_date '
+                                  'to users/{id}/settings/app for the selected users.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
     );
   }
 }

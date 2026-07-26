@@ -351,6 +351,7 @@ class _EditItemDialogState extends State<EditItemDialog> {
         quantity:
             double.tryParse(_quantityController.text) ?? widget.item.quantity,
         availableQty: widget.item.availableQty,
+        archivedQty: widget.item.archivedQty,
         sellPrice:
             double.tryParse(_sellPriceController.text) ?? widget.item.sellPrice,
         hsnCode: _hsnController.text.trim().isNotEmpty

@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:xeebill_web/models/general_category_model.dart';
 import 'package:xeebill_web/models/subcategory_model.dart';
 import 'package:xeebill_web/screens/add_subcategory_screen.dart';
+import 'package:xeebill_web/screens/general_hsn_gst_rates_screen.dart';
 import 'package:xeebill_web/utils/app_colors.dart';
 import 'package:xeebill_web/utils/constants.dart';
 import 'package:xeebill_web/utils/functions.dart';
@@ -139,12 +140,8 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
         ),
       );
 
-      // Sort subcategories alphabetically within each category
-      for (var category in categories) {
-        category.subcategories.sort(
-          (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-        );
-      }
+      // Load subcategories from general_sub_categories (by gen_cat_code)
+      await GeneralCategory.attachSubcategoriesFromCollection(categories);
 
       final expandNorm = _normCatCode(expandCategoryCode);
       final highlightCatNorm = _normCatCode(highlightCategoryCode);
@@ -256,6 +253,344 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
   double _categoryListScrollOffsetOrZero() {
     if (!_categoryListScrollController.hasClients) return 0;
     return _categoryListScrollController.offset;
+  }
+
+  List<Map<String, dynamic>> _parseGeneralSubCategoryMapsFromJson(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) {
+      throw const FormatException('JSON cannot be empty');
+    }
+
+    final decoded = jsonDecode(trimmed);
+    if (decoded is! List) {
+      throw const FormatException(
+        'JSON must be an array of subcategory objects',
+      );
+    }
+
+    final parsed = <Map<String, dynamic>>[];
+    final seenCodes = <String>{};
+
+    for (var i = 0; i < decoded.length; i++) {
+      final item = decoded[i];
+      if (item is! Map) {
+        throw FormatException('Item at index $i must be a JSON object');
+      }
+
+      final map = Map<String, dynamic>.from(item);
+      final code = (map['code'] ?? '').toString().trim();
+      final name = (map['name'] ?? '').toString().trim();
+
+      if (code.isEmpty || name.isEmpty) {
+        throw FormatException(
+          'Item at index $i must include non-empty "code" and "name"',
+        );
+      }
+      if (seenCodes.contains(code)) {
+        throw FormatException('Duplicate subcategory code "$code" in JSON');
+      }
+      seenCodes.add(code);
+
+      // Store attributes as a JSON string.
+      String attributesJson = '';
+      final rawAttributes = map['attributes'];
+      if (rawAttributes is String) {
+        attributesJson = rawAttributes;
+      } else if (rawAttributes is Map || rawAttributes is List) {
+        attributesJson = jsonEncode(rawAttributes);
+      } else if (rawAttributes != null) {
+        attributesJson = rawAttributes.toString();
+      }
+
+      String attributeTypes = '';
+      final rawAttributeTypes = map['attribute_types'];
+      if (rawAttributeTypes is String) {
+        attributeTypes = rawAttributeTypes;
+      } else if (rawAttributeTypes is Map || rawAttributeTypes is List) {
+        attributeTypes = jsonEncode(rawAttributeTypes);
+      } else if (rawAttributeTypes != null) {
+        attributeTypes = rawAttributeTypes.toString();
+      }
+
+      final gstRaw = map['gst_rate'];
+      final gstRate = gstRaw is num
+          ? gstRaw.toDouble()
+          : double.tryParse(gstRaw?.toString() ?? '');
+
+      parsed.add({
+        'code': code,
+        'name': name,
+        'attributes': attributesJson,
+        'attribute_types': attributeTypes,
+        'hsn_code': (map['hsn_code'] ?? '').toString().trim(),
+        'unit': (map['unit'] ?? 'Piece').toString().trim().isEmpty
+            ? 'Piece'
+            : (map['unit'] ?? 'Piece').toString().trim(),
+        'description': (map['description'] ?? '').toString(),
+        'gst_rate': gstRate,
+      });
+    }
+
+    return parsed;
+  }
+
+  Future<void> _showImportSubcategoriesJsonDialog(int index) async {
+    final category = _filteredCategories[index];
+    final jsonController = TextEditingController();
+    var isSubmitting = false;
+    String? errorText;
+
+    const exampleJson = '''[
+  {
+    "code": "000030-31",
+    "name": "Prawns Dried",
+    "attributes": "{\\"Type\\":{\\"Fresh\\":false}}",
+    "attribute_types": "",
+    "hsn_code": "030695",
+    "unit": "Packet",
+    "description": "",
+    "gst_rate": 5
+  }
+]''';
+
+    if (!mounted) return;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (dialogContext) {
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Import subcategories — ${category.categoryName}'),
+              content: SizedBox(
+                width: MediaQuery.of(context).size.width * 0.55,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        'Paste a JSON array. Each object is saved as a record in '
+                        'general_sub_categories (document id = code).',
+                        style: TextStyle(fontSize: 13, color: Colors.grey[700]),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: jsonController,
+                        maxLines: 14,
+                        minLines: 10,
+                        enabled: !isSubmitting,
+                        decoration: InputDecoration(
+                          hintText: exampleJson,
+                          border: const OutlineInputBorder(),
+                          alignLabelWithHint: true,
+                          errorText: errorText,
+                        ),
+                        style: const TextStyle(
+                          fontFamily: 'monospace',
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.of(dialogContext).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () async {
+                          setDialogState(() {
+                            isSubmitting = true;
+                            errorText = null;
+                          });
+
+                          try {
+                            final parsed = _parseGeneralSubCategoryMapsFromJson(
+                              jsonController.text,
+                            );
+
+                            // Check which codes already exist.
+                            final existingDocs =
+                                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+                            const chunkSize = 10;
+                            for (var i = 0; i < parsed.length; i += chunkSize) {
+                              final chunk = parsed
+                                  .skip(i)
+                                  .take(chunkSize)
+                                  .map((e) => e['code'] as String)
+                                  .toList();
+                              final snap = await FirebaseFirestore.instance
+                                  .collection('general_sub_categories')
+                                  .where(FieldPath.documentId, whereIn: chunk)
+                                  .get();
+                              existingDocs.addAll(snap.docs);
+                            }
+
+                            final existingById = {
+                              for (final doc in existingDocs) doc.id: doc,
+                            };
+                            final existingCodes = existingById.keys.toList()
+                              ..sort();
+
+                            if (existingCodes.isNotEmpty) {
+                              if (!dialogContext.mounted) return;
+                              final preview = existingCodes.take(8).join(', ');
+                              final more = existingCodes.length > 8
+                                  ? ' and ${existingCodes.length - 8} more'
+                                  : '';
+                              final replace = await showDialog<bool>(
+                                context: dialogContext,
+                                builder: (confirmCtx) => AlertDialog(
+                                  title: const Text('Replace existing records?'),
+                                  content: Text(
+                                    '${existingCodes.length} subcategor'
+                                    '${existingCodes.length == 1 ? 'y' : 'ies'} '
+                                    'already exist in general_sub_categories:\n\n'
+                                    '$preview$more\n\n'
+                                    'Replace them with the imported values?',
+                                  ),
+                                  actions: [
+                                    TextButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmCtx, false),
+                                      child: const Text('Cancel'),
+                                    ),
+                                    ElevatedButton(
+                                      onPressed: () =>
+                                          Navigator.pop(confirmCtx, true),
+                                      style: ElevatedButton.styleFrom(
+                                        backgroundColor: Colors.orange,
+                                        foregroundColor: Colors.white,
+                                      ),
+                                      child: const Text('Replace'),
+                                    ),
+                                  ],
+                                ),
+                              );
+
+                              if (replace != true) {
+                                setDialogState(() => isSubmitting = false);
+                                return;
+                              }
+                            }
+
+                            final now = DateTime.now();
+                            var createdCount = 0;
+                            var replacedCount = 0;
+
+                            // Firestore batch limit is 500.
+                            const batchLimit = 400;
+                            var batch = FirebaseFirestore.instance.batch();
+                            var opsInBatch = 0;
+
+                            Future<void> commitBatch() async {
+                              if (opsInBatch == 0) return;
+                              await batch.commit();
+                              batch = FirebaseFirestore.instance.batch();
+                              opsInBatch = 0;
+                            }
+
+                            for (final item in parsed) {
+                              final code = item['code'] as String;
+                              final ref = FirebaseFirestore.instance
+                                  .collection('general_sub_categories')
+                                  .doc(code);
+
+                              final existing = existingById[code];
+                              DateTime createdAt = now;
+                              if (existing != null) {
+                                final data = existing.data();
+                                final rawCreated = data['created_at'];
+                                if (rawCreated is Timestamp) {
+                                  createdAt = rawCreated.toDate();
+                                } else if (rawCreated is String) {
+                                  createdAt =
+                                      DateTime.tryParse(rawCreated) ?? now;
+                                }
+                                replacedCount++;
+                              } else {
+                                createdCount++;
+                              }
+
+                              batch.set(ref, {
+                                'code': code,
+                                'gen_cat_code': category.code,
+                                'name': item['name'],
+                                'attributes': item['attributes'],
+                                'attribute_types': item['attribute_types'],
+                                'hsn_code': item['hsn_code'],
+                                'unit': item['unit'],
+                                'description': item['description'],
+                                'gst_rate': item['gst_rate'],
+                                'remarks': <String, dynamic>{},
+                                'created_at': createdAt.toIso8601String(),
+                                'updated_at': now.toIso8601String(),
+                              });
+                              opsInBatch++;
+
+                              if (opsInBatch >= batchLimit) {
+                                await commitBatch();
+                              }
+                            }
+                            await commitBatch();
+
+                            if (!dialogContext.mounted) return;
+                            Navigator.of(dialogContext).pop();
+
+                            if (!mounted) return;
+                            ScaffoldMessenger.of(context).showSnackBar(
+                              SnackBar(
+                                content: Text(
+                                  'Imported ${parsed.length} subcategor'
+                                  '${parsed.length == 1 ? 'y' : 'ies'} '
+                                  '($createdCount new, $replacedCount replaced)',
+                                ),
+                                backgroundColor: Colors.green,
+                              ),
+                            );
+                          } on FormatException catch (e) {
+                            setDialogState(() {
+                              errorText = e.message;
+                              isSubmitting = false;
+                            });
+                          } catch (e) {
+                            setDialogState(() {
+                              errorText = e.toString();
+                              isSubmitting = false;
+                            });
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                            color: Colors.white,
+                          ),
+                        )
+                      : const Text('Import'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    jsonController.dispose();
   }
 
   Future<void> _navigateToAddSubcategory(int index) async {
@@ -458,7 +793,6 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                         .add({
                           'code': codeController.text.trim(),
                           'category_name': nameController.text.trim(),
-                          'subcategories': jsonEncode([]),
                           'createdAt': DateTime.now(),
                           'updatedAt': DateTime.now(),
                         });
@@ -641,7 +975,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                   return;
                 }
 
-                // Create new subcategory
+                // Create new subcategory in general_sub_categories
                 SubCategory newSubcategory = SubCategory(
                   name: nameController.text,
                   code: newCode,
@@ -658,15 +992,12 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                       : double.tryParse(gstRateController.text),
                 );
 
-                // Add to category
-                category.subcategories.add(newSubcategory);
-                category.subcategories.sort(
-                  (a, b) =>
-                      a.name.toLowerCase().compareTo(b.name.toLowerCase()),
-                );
-
-                // Update in Firestore
-                await _updateCategoryInFirestore(category);
+                final saved =
+                    await _upsertSubcategoryInCollection(
+                      categoryCode: category.code,
+                      subcategory: newSubcategory,
+                    );
+                if (!saved) return;
 
                 if (mounted) {
                   Navigator.of(context).pop();
@@ -690,68 +1021,113 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     );
   }
 
-  Future<void> _updateCategoryInFirestore(GeneralCategory category) async {
+  Future<bool> _upsertSubcategoryInCollection({
+    required String categoryCode,
+    required SubCategory subcategory,
+    String? previousCode,
+  }) async {
     try {
-      final seenCodes = <String>{};
-      for (final sub in category.subcategories) {
-        final c = sub.code.trim();
-        if (c.isEmpty) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(
-                content: Text(
-                  'Subcategory codes cannot be empty. Fix duplicates or blank codes before saving.',
-                ),
-              ),
-            );
-          }
-          return;
+      final code = subcategory.code.trim();
+      if (code.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Subcategory code cannot be empty'),
+            ),
+          );
         }
-        if (seenCodes.contains(c)) {
-          if (mounted) {
-            ScaffoldMessenger.of(context).showSnackBar(
-              SnackBar(
-                content: Text(
-                  'Duplicate subcategory code "$c". Each subcategory must have a unique code.',
-                ),
-              ),
-            );
-          }
-          return;
-        }
-        seenCodes.add(c);
+        return false;
       }
 
-      // Convert subcategories to JSON
-      List<Map<String, dynamic>> subcategoriesJson = category.subcategories.map(
-        (sub) {
-          return {
-            'code': sub.code,
-            'name': sub.name,
-            'attributes': sub.attributes,
-            'attribute_types': sub.attributeTypes,
-            'hsn_code': sub.hsnCode,
-            'unit': sub.unit,
-            'description': sub.description,
-            'gst_rate': sub.gstRate,
-          };
-        },
-      ).toList();
+      final now = DateTime.now().toIso8601String();
+      final col = FirebaseFirestore.instance.collection('general_sub_categories');
+      final oldCode = (previousCode ?? '').trim();
 
-      await FirebaseFirestore.instance
-          .collection('general_categories')
-          .doc(category.id)
-          .update({
-            'subcategories': jsonEncode(subcategoriesJson),
-            'updatedAt': DateTime.now(),
-          });
+      if (oldCode.isNotEmpty && oldCode != code) {
+        final oldRef = col.doc(oldCode);
+        final oldSnap = await oldRef.get();
+        String createdAt = now;
+        Map<String, dynamic> remarks = {};
+        if (oldSnap.exists) {
+          final data = oldSnap.data() ?? {};
+          final rawCreated = data['created_at'];
+          if (rawCreated is Timestamp) {
+            createdAt = rawCreated.toDate().toIso8601String();
+          } else if (rawCreated is String && rawCreated.isNotEmpty) {
+            createdAt = rawCreated;
+          }
+          final rawRemarks = data['remarks'];
+          if (rawRemarks is Map) {
+            remarks = Map<String, dynamic>.from(rawRemarks);
+          }
+          await oldRef.delete();
+        }
+        await col.doc(code).set(
+              subcategory.toFirestoreMap(
+                genCatCode: categoryCode,
+                createdAt: createdAt,
+                updatedAt: now,
+                remarks: remarks,
+              ),
+            );
+        return true;
+      }
+
+      final ref = col.doc(code);
+      final existing = await ref.get();
+      String createdAt = now;
+      Map<String, dynamic> remarks = {};
+      if (existing.exists) {
+        final data = existing.data() ?? {};
+        final rawCreated = data['created_at'];
+        if (rawCreated is Timestamp) {
+          createdAt = rawCreated.toDate().toIso8601String();
+        } else if (rawCreated is String && rawCreated.isNotEmpty) {
+          createdAt = rawCreated;
+        }
+        final rawRemarks = data['remarks'];
+        if (rawRemarks is Map) {
+          remarks = Map<String, dynamic>.from(rawRemarks);
+        }
+      }
+
+      await ref.set(
+        subcategory.toFirestoreMap(
+          genCatCode: categoryCode,
+          createdAt: createdAt,
+          updatedAt: now,
+          remarks: remarks,
+        ),
+      );
+      return true;
     } catch (e) {
-      debugPrint('Error updating category in Firestore: $e');
+      debugPrint('Error saving subcategory: $e');
       if (mounted) {
-        ScaffoldMessenger.of(
-          context,
-        ).showSnackBar(SnackBar(content: Text('Error updating category: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error saving subcategory: $e')),
+        );
       }
+      return false;
+    }
+  }
+
+  Future<bool> _deleteSubcategoryFromCollection(String code) async {
+    try {
+      final trimmed = code.trim();
+      if (trimmed.isEmpty) return false;
+      await FirebaseFirestore.instance
+          .collection('general_sub_categories')
+          .doc(trimmed)
+          .delete();
+      return true;
+    } catch (e) {
+      debugPrint('Error deleting subcategory: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Error deleting subcategory: $e')),
+        );
+      }
+      return false;
     }
   }
 
@@ -1005,19 +1381,9 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     }
 
     try {
-      // Find the original category to get all subcategories
-      final originalCategory = _categories.firstWhere(
-        (c) => c.code == category.code,
-        orElse: () => category,
-      );
-
-      // Remove the subcategory from the original category
-      originalCategory.subcategories.removeWhere(
-        (sub) => sub.code == subcategory.code,
-      );
-
-      // Update in Firestore
-      await _updateCategoryInFirestore(originalCategory);
+      final deleted =
+          await _deleteSubcategoryFromCollection(subcategory.code);
+      if (!deleted) return;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
@@ -1078,6 +1444,18 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
               if (_searchController.text.isNotEmpty) {
                 _clearSearch();
               }
+            },
+          ),
+          IconButton(
+            icon: Icon(Icons.table_chart_outlined, color: AppColors.primaryGreen),
+            tooltip: 'HSN & GST Rates',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) => const GeneralHsnGstRatesScreen(),
+                ),
+              );
             },
           ),
           IconButton(
@@ -1238,6 +1616,18 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                     padding: EdgeInsets.zero,
                     constraints: const BoxConstraints(),
                     tooltip: 'Add Subcategory',
+                  ),
+                if (ADD_GEN_CAT)
+                  IconButton(
+                    icon: Icon(
+                      Icons.data_object_outlined,
+                      color: AppColors.primaryGreen,
+                      size: 20,
+                    ),
+                    onPressed: () => _showImportSubcategoriesJsonDialog(index),
+                    padding: EdgeInsets.zero,
+                    constraints: const BoxConstraints(),
+                    tooltip: 'Import subcategories from JSON',
                   ),
               ],
             ),

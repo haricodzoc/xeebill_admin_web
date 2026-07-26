@@ -1229,6 +1229,38 @@ class _ItemsScreenState extends State<ItemsScreen> {
                   ),
                 ],
               ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Icon(Icons.schedule, size: 14, color: Colors.grey[600]),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Created: ${_formatDateTime(item.createdAt)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 4),
+              Row(
+                children: [
+                  Icon(Icons.update, size: 14, color: Colors.grey[600]),
+                  const SizedBox(width: 6),
+                  Expanded(
+                    child: Text(
+                      'Updated: ${_formatDateTime(item.updatedAt)}',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.grey[700],
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               if (mappings.isNotEmpty) ...[
                 const SizedBox(height: 10),
                 Text(
@@ -1382,6 +1414,10 @@ class _ItemsScreenState extends State<ItemsScreen> {
                     _buildDetailRow(
                       'Available Quantity',
                       item.availableQty.toString(),
+                    ),
+                    _buildDetailRow(
+                      'Archived Quantity',
+                      item.archivedQty.toString(),
                     ),
                     _buildDetailRow('Unit', item.unit),
                     if (item.taxPerc != null)

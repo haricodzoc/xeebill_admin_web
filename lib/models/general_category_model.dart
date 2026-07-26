@@ -1,8 +1,4 @@
-// Model for category document
-import 'dart:convert';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
-import 'package:flutter/material.dart';
 import 'package:xeebill_web/models/subcategory_model.dart';
 
 class GeneralCategory {
@@ -25,24 +21,40 @@ class GeneralCategory {
   factory GeneralCategory.fromFirestore(DocumentSnapshot doc) {
     Map<String, dynamic> data = doc.data() as Map<String, dynamic>;
 
-    // Parse subcategories from JSON string
-    List<SubCategory> subcategories = [];
-    if (data['subcategories'] != null) {
-      try {
-        List<dynamic> subcatData = jsonDecode(data['subcategories']);
-        subcategories = subcatData
-            .map((item) => SubCategory.fromJson(item))
-            .toList();
-      } catch (e) {
-        debugPrint('Error parsing subcategories: $e');
-      }
-    }
-
     return GeneralCategory(
       id: doc.id,
       code: data['code']?.toString() ?? '',
       categoryName: data['category_name']?.toString() ?? 'Unknown Category',
-      subcategories: subcategories,
+      // Subcategories live in `general_sub_categories` (matched by gen_cat_code).
+      subcategories: [],
     );
+  }
+
+  /// Loads all docs from `general_sub_categories` and attaches them to categories
+  /// where `category.code == gen_cat_code`.
+  static Future<void> attachSubcategoriesFromCollection(
+    List<GeneralCategory> categories,
+  ) async {
+    final snap =
+        await FirebaseFirestore.instance.collection('general_sub_categories').get();
+
+    final byGenCatCode = <String, List<SubCategory>>{};
+    for (final doc in snap.docs) {
+      final data = doc.data();
+      final genCatCode = (data['gen_cat_code'] ?? '').toString().trim();
+      if (genCatCode.isEmpty) continue;
+
+      byGenCatCode.putIfAbsent(genCatCode, () => []).add(
+            SubCategory.fromFirestoreData(data, documentId: doc.id),
+          );
+    }
+
+    for (final category in categories) {
+      final list = byGenCatCode[category.code.trim()] ?? [];
+      list.sort(
+        (a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()),
+      );
+      category.subcategories = list;
+    }
   }
 }

@@ -58,6 +58,8 @@ class _ImportCategoriesScreenState extends State<ImportCategoriesScreen> {
         ),
       );
 
+      await GeneralCategory.attachSubcategoriesFromCollection(categories);
+
       setState(() {
         _categories = categories;
         _filteredCategories = categories;

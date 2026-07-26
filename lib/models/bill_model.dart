@@ -7,6 +7,20 @@ import 'package:flutter/foundation.dart';
 import 'package:xeebill_web/utils/constants.dart';
 import 'bill_item_model.dart';
 
+/// Firestore/API may return `additional_info` as JSON text or an already-decoded map/list.
+String _additionalInfoColumnToJsonString(dynamic value) {
+  if (value == null) return '';
+  if (value is String) return value;
+  if (value is Map || value is List) {
+    try {
+      return jsonEncode(value);
+    } catch (_) {
+      return value.toString();
+    }
+  }
+  return value.toString();
+}
+
 class BillModel {
   int? id;
   String billCode;
@@ -101,7 +115,7 @@ class BillModel {
       'last_updated_profile': lastUpdatedProfile,
       'payment_mode': paymentMode,
       'credit_amount': creditAmount,
-      'additional_info': jsonEncode(additionalInfo),
+      'additional_info': additionalInfo,
       'due_date': dueDate.toIso8601String(),
       if (locationId != null && locationId!.trim().isNotEmpty) 'location_id': locationId,
       'created_at': createdAt.toIso8601String(),
@@ -155,10 +169,7 @@ class BillModel {
           map.containsKey('credit_amount') && map['credit_amount'] != null
           ? (map['credit_amount'] as num).toDouble()
           : 0.0,
-      additionalInfo:
-          map.containsKey('additional_info') && map['additional_info'] != null
-          ? (jsonDecode(map['additional_info']))
-          : '',
+      additionalInfo: _additionalInfoColumnToJsonString(map['additional_info']),
       dueDate: map.containsKey('due_date') && map['due_date'] != null
           ? DateTime.parse(map['due_date'])
           : DateTime.now(),
@@ -181,7 +192,7 @@ class BillModel {
     }
 
     // Helper to parse timestamp
-    DateTime _parseTimestamp(dynamic timestamp, DateTime fallback) {
+    DateTime parseTimestamp(dynamic timestamp, DateTime fallback) {
       if (timestamp == null) return fallback;
       if (timestamp is Timestamp) {
         return timestamp.toDate();
@@ -197,17 +208,23 @@ class BillModel {
       return fallback;
     }
 
+    String asString(dynamic value, [String fallback = '']) {
+      if (value == null) return fallback;
+      if (value is String) return value;
+      return value.toString();
+    }
+
     return BillModel(
       id: data['id'] as int?,
-      billCode: data['bill_code'] as String? ?? '',
-      customerCode: data['customer_code'] as String? ?? '',
-      customerName: data['customer_name'] as String? ?? '',
-      customerGst: data['customer_gst'] as String? ?? '',
-      customerAddress: data['customer_address'] as String? ?? '',
+      billCode: asString(data['bill_code']),
+      customerCode: asString(data['customer_code']),
+      customerName: asString(data['customer_name']),
+      customerGst: asString(data['customer_gst']),
+      customerAddress: asString(data['customer_address']),
       billNo: (data['bill_no'] as num?)?.toInt() ?? 0,
-      type: data['type'] as String? ?? GstType.composite.toString(),
-      invoiceNumber: data['invoice_number'] as String? ?? '',
-      financialYear: data['financial_year'] as String? ?? '',
+      type: asString(data['type'], GstType.composite.toString()),
+      invoiceNumber: asString(data['invoice_number']),
+      financialYear: asString(data['financial_year']),
       subTotal: (data['sub_total'] as num?)?.toDouble() ?? 0.0,
       discount: (data['discount'] as num?)?.toDouble() ?? 0.0,
       grandTotal: (data['grand_total'] as num?)?.toDouble() ?? 0.0,
@@ -216,36 +233,30 @@ class BillModel {
       returnTotal: (data['return_total'] as num?)?.toDouble() ?? 0.0,
       netPayable: (data['net_payable'] as num?)?.toDouble() ?? 0.0,
       completed: data['completed'] == true || data['completed'] == 1,
-      billDate: _parseTimestamp(
+      billDate: parseTimestamp(
         data['bill_date'] ?? data['billDate'],
         DateTime.now(),
       ),
-      billTime: _parseTimestamp(
+      billTime: parseTimestamp(
         data['bill_time'] ?? data['billTime'],
         DateTime.now(),
       ),
-      profileId: data['profile_id'] as String? ?? '',
-      profileCode: data['profile_code'] as String? ?? '',
-      lastUpdatedProfile: data['last_updated_profile'] as String? ?? '',
+      profileId: asString(data['profile_id']),
+      profileCode: asString(data['profile_code']),
+      lastUpdatedProfile: asString(data['last_updated_profile']),
       paymentMode:
-          data['payment_mode'] as String? ?? PaymentModes.cash.toString(),
+          asString(data['payment_mode'], PaymentModes.cash.toString()),
       creditAmount: (data['credit_amount'] as num?)?.toDouble() ?? 0.0,
-      additionalInfo: data['additional_info'] != null
-          ? (data['additional_info'] is String
-                ? (data['additional_info'] as String).isNotEmpty
-                      ? jsonDecode(data['additional_info'] as String)
-                      : ''
-                : data['additional_info'].toString())
-          : '',
-      dueDate: _parseTimestamp(data['due_date'], DateTime.now()),
+      additionalInfo: _additionalInfoColumnToJsonString(data['additional_info']),
+      dueDate: parseTimestamp(data['due_date'], DateTime.now()),
       locationId: () {
         final loc = data['location_id'] ?? data['locationId'];
         if (loc == null) return null;
         final s = loc.toString().trim();
         return s.isEmpty ? null : s;
       }(),
-      createdAt: _parseTimestamp(data['created_at'], DateTime.now()),
-      updatedAt: _parseTimestamp(data['updated_at'], DateTime.now()),
+      createdAt: parseTimestamp(data['created_at'], DateTime.now()),
+      updatedAt: parseTimestamp(data['updated_at'], DateTime.now()),
       items: _parseItems(data['items']),
     );
   }
@@ -262,8 +273,8 @@ class BillModel {
         final decoded = jsonDecode(itemsData);
         if (decoded is List) {
           for (var item in decoded) {
-            if (item is Map<String, dynamic>) {
-              items.add(BillItem.fromMap(item));
+            if (item is Map) {
+              items.add(BillItem.fromMap(Map<String, dynamic>.from(item)));
             }
           }
         }
@@ -271,8 +282,8 @@ class BillModel {
       // If items is already a List
       else if (itemsData is List) {
         for (var item in itemsData) {
-          if (item is Map<String, dynamic>) {
-            items.add(BillItem.fromMap(item));
+          if (item is Map) {
+            items.add(BillItem.fromMap(Map<String, dynamic>.from(item)));
           }
         }
       }

@@ -4,6 +4,7 @@ import 'user_list_screen.dart';
 import 'general_category_screen.dart';
 import 'settings_screen.dart';
 import 'recharge_plans_screen.dart';
+import 'onboardings_screen.dart';
 
 class HomeScreen extends StatelessWidget {
   const HomeScreen({super.key});
@@ -180,6 +181,21 @@ class HomeScreen extends StatelessWidget {
                             context,
                             MaterialPageRoute(
                               builder: (context) => const RechargePlansScreen(),
+                            ),
+                          );
+                        },
+                      ),
+                      _buildActionCard(
+                        context,
+                        icon: Icons.groups_outlined,
+                        title: 'Onboardings',
+                        subtitle: 'Track customer onboarding',
+                        color: Colors.indigo,
+                        onTap: () {
+                          Navigator.push(
+                            context,
+                            MaterialPageRoute(
+                              builder: (context) => const OnboardingsScreen(),
                             ),
                           );
                         },

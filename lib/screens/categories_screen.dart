@@ -5,8 +5,9 @@ import 'package:flutter/material.dart';
 import '../models/category_model.dart';
 import '../models/item_model.dart';
 import '../utils/constants.dart';
-import 'import_categories_screen.dart';
 import 'deleted_category_items_screen.dart';
+import 'hsn_gst_rates_screen.dart';
+import 'import_categories_screen.dart';
 
 class CategoriesScreen extends StatefulWidget {
   final String userId;
@@ -43,6 +44,9 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   /// Attribute types per category code
   /// Structure: { categoryCode: { attributeName: typeInt } }
   final Map<String, Map<String, int>> _categoryAttributeTypes = {};
+
+  /// `categoryCode::attributeName` after a successful copy.
+  String? _attributeValuesCopiedFrom;
 
   @override
   void initState() {
@@ -1041,6 +1045,170 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
     );
   }
 
+  String _attributeCopyKey(String categoryCode, String attributeName) {
+    return '$categoryCode::$attributeName';
+  }
+
+  Map<String, dynamic>? _selectAttributeValues(
+    String categoryCode,
+    String attributeName,
+  ) {
+    final catAttrs = _categoryAttributes[categoryCode];
+    if (catAttrs == null) return null;
+    final raw = catAttrs[attributeName];
+    if (raw is! Map<String, dynamic>) return null;
+
+    final values = <String, dynamic>{};
+    for (final entry in raw.entries) {
+      final k = entry.key.toString();
+      if (k == 'default_text' ||
+          k == 'default_date' ||
+          k == 'start_date' ||
+          k == 'end_date') {
+        continue;
+      }
+      final v = entry.value;
+      if (v is bool || v is int || v is num) {
+        values[k] = v == true || v == 1;
+      }
+    }
+    return values;
+  }
+
+  void _copyAttributeValues(String categoryCode, String attributeName) {
+    final values = _selectAttributeValues(categoryCode, attributeName);
+    if (values == null || values.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('No attribute values to copy'),
+          backgroundColor: Colors.red,
+        ),
+      );
+      return;
+    }
+
+    COPIED_ATTRIBUTE_VALUE = jsonEncode(values);
+    setState(() {
+      _attributeValuesCopiedFrom =
+          _attributeCopyKey(categoryCode, attributeName);
+    });
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          'Copied ${values.length} value(s) from "$attributeName"',
+        ),
+        backgroundColor: Colors.green,
+      ),
+    );
+  }
+
+  void _pasteAttributeValues(String categoryCode, String attributeName) {
+    if (COPIED_ATTRIBUTE_VALUE.isEmpty) return;
+
+    try {
+      final copied = jsonDecode(COPIED_ATTRIBUTE_VALUE) as Map<String, dynamic>;
+      var addedCount = 0;
+
+      setState(() {
+        final catAttrs = _categoryAttributes.putIfAbsent(
+          categoryCode,
+          () => <String, dynamic>{},
+        );
+        if (catAttrs[attributeName] is! Map<String, dynamic>) {
+          catAttrs[attributeName] = <String, dynamic>{};
+        }
+        final map = catAttrs[attributeName] as Map<String, dynamic>;
+
+        for (final entry in copied.entries) {
+          final key = entry.key.toString();
+          if (!map.containsKey(key)) {
+            map[key] = entry.value == true || entry.value == 1;
+            addedCount++;
+          }
+        }
+
+        COPIED_ATTRIBUTE_VALUE = '';
+        _attributeValuesCopiedFrom = null;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            addedCount > 0
+                ? 'Pasted $addedCount value(s) to "$attributeName"'
+                : 'All values already exist in "$attributeName"',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    } catch (e) {
+      COPIED_ATTRIBUTE_VALUE = '';
+      setState(() => _attributeValuesCopiedFrom = null);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Failed to paste attribute values: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
+  }
+
+  Widget _buildCopyPasteAttributeValuesLink(
+    String categoryCode,
+    String attributeName,
+  ) {
+    final copyKey = _attributeCopyKey(categoryCode, attributeName);
+
+    if (_attributeValuesCopiedFrom == copyKey) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
+        child: Center(
+          child: Text(
+            'Attribute values copied',
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
+          ),
+        ),
+      );
+    }
+
+    if (COPIED_ATTRIBUTE_VALUE.isNotEmpty) {
+      return Padding(
+        padding: const EdgeInsets.only(left: 16, right: 16, top: 8),
+        child: InkWell(
+          onTap: () => _pasteAttributeValues(categoryCode, attributeName),
+          child: Center(
+            child: Text(
+              'Paste attribute values',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w600,
+                color: Colors.green[700],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    return Padding(
+      padding: const EdgeInsets.only(left: 16, right: 16, top: 12),
+      child: InkWell(
+        onTap: () => _copyAttributeValues(categoryCode, attributeName),
+        child: Center(
+          child: Text(
+            'Copy attribute values',
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: Colors.green[700],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _buildAttributeChildren(
     String categoryCode,
     String attributeName,
@@ -1204,6 +1372,7 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
                 label: const Text('Add value', style: TextStyle(fontSize: 12)),
               ),
             ),
+            _buildCopyPasteAttributeValuesLink(categoryCode, attributeName),
           ],
         ),
       );
@@ -1531,6 +1700,19 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
           ],
         ),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.table_chart_outlined),
+            tooltip: 'HSN & GST Rates',
+            onPressed: () {
+              Navigator.push(
+                context,
+                MaterialPageRoute(
+                  builder: (context) =>
+                      HsnGstRatesScreen(userId: widget.userId),
+                ),
+              );
+            },
+          ),
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Refresh',
