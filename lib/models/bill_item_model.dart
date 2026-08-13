@@ -5,6 +5,7 @@ class BillItem {
   int billId;
   String code;
   String name;
+  String unit;
   String hsnCode;
   String categoryCode;
   double price;
@@ -21,6 +22,7 @@ class BillItem {
     required this.billId,
     required this.name,
     required this.hsnCode,
+    required this.unit,
     required this.categoryCode,
     required this.code,
     required this.price,
@@ -33,7 +35,6 @@ class BillItem {
     this.originalQuantity = 0,
   });
 
-  // Explicitly defining the return type as Map<String, dynamic>
   Map<String, dynamic> toMap() {
     return {
       'id': id,
@@ -41,6 +42,7 @@ class BillItem {
       'code': code,
       'name': name,
       'hsn_code': hsnCode,
+      'unit': unit,
       'price': price,
       'quantity': quantity,
       'return_quantity': returnQuantity,
@@ -54,27 +56,23 @@ class BillItem {
 
   factory BillItem.fromMap(Map<String, dynamic> map) {
     return BillItem(
-      id: map['id'] as int?,
+      id: (map['id'] as num?)?.toInt(),
       billId: (map['bill_id'] as num?)?.toInt() ?? 0,
-      code: map['code'] as String? ?? '',
-      name: map['name'] as String? ?? '',
-      hsnCode: map['hsn_code'] as String? ?? '',
+      code: map['code']?.toString() ?? '',
+      name: map['name']?.toString() ?? '',
+      unit: map['unit']?.toString() ?? '',
+      hsnCode: map['hsn_code']?.toString() ?? '',
       price: (map['price'] as num?)?.toDouble() ?? 0.0,
       quantity: (map['quantity'] as num?)?.toDouble() ?? 0.0,
-      returnQuantity:
-          map.containsKey('return_quantity') && map['return_quantity'] != null
-          ? (map['return_quantity'] as num).toDouble()
-          : 0.0,
+      returnQuantity: (map['return_quantity'] as num?)?.toDouble() ?? 0.0,
       total: (map['total'] as num?)?.toDouble() ?? 0.0,
       taxPerc: (map['tax_perc'] as num?)?.toDouble() ?? 0.0,
       totalAfterTax: (map['total_after_tax'] as num?)?.toDouble() ?? 0.0,
-      isReturned: map['is_returned'] == true || map['is_returned'] == 1,
+      isReturned: map['is_returned'] == 1 || map['is_returned'] == true,
       categoryCode:
-          map.containsKey('category_code') && map['category_code'] != null
-          ? map['category_code'] as String
-          : (map.containsKey('category_id') && map['category_id'] != null
-                ? map['category_id'].toString()
-                : ''),
+          map['category_code']?.toString() ??
+          map['category_id']?.toString() ??
+          '',
     );
   }
 }

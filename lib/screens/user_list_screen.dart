@@ -894,7 +894,7 @@ class _UserListScreenState extends State<UserListScreen> {
                       _buildInfoRow('Phone', user.phone ?? 'N/A'),
                       _buildInfoRow('Address', user.address ?? 'N/A'),
                       _buildInfoRow('GST Number', user.gstNumber ?? 'N/A'),
-                      _buildInfoRow('Active Plan', activePlanName),
+                      _buildActivePlanRow(user, activePlanName),
                       _buildPremiumCustomerRow(user),
                       _buildActiveDeviceRow(user),
                       _buildAccountExpiryRow(user),
@@ -2108,6 +2108,241 @@ class _UserListScreenState extends State<UserListScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildActivePlanRow(UserModel user, String activePlanName) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              'Active Plan:',
+              style: TextStyle(
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[700],
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                  child: Text(
+                    activePlanName,
+                    style: TextStyle(
+                      color: AppColors.primaryText,
+                      fontSize: 13,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => _showSetActivePlanDialog(user),
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 6,
+                    ),
+                    foregroundColor: AppColors.primaryGreen,
+                    visualDensity: VisualDensity.compact,
+                  ),
+                  child: const Text('Set Plan'),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _showSetActivePlanDialog(UserModel user) async {
+    final currentPlanId = _normalizePlanId(user.planId, allowEmpty: true);
+
+    showDialog<void>(
+      context: context,
+      builder: (dialogContext) {
+        return FutureBuilder<QuerySnapshot<Map<String, dynamic>>>(
+          future: _firestore.collection('recharge_plans').get(),
+          builder: (context, snapshot) {
+            if (snapshot.connectionState == ConnectionState.waiting) {
+              return const AlertDialog(
+                title: Text('Set Active Plan'),
+                content: SizedBox(
+                  height: 120,
+                  child: Center(child: CircularProgressIndicator()),
+                ),
+              );
+            }
+
+            if (snapshot.hasError) {
+              return AlertDialog(
+                title: const Text('Set Active Plan'),
+                content: Text('Failed to load plans: ${snapshot.error}'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(dialogContext),
+                    child: const Text('Close'),
+                  ),
+                ],
+              );
+            }
+
+            final docs = snapshot.data?.docs ?? [];
+            final plans = docs.map((doc) {
+              final data = doc.data();
+              return (
+                docId: doc.id,
+                planId: _normalizePlanId(data['plan_id'], allowEmpty: true) ??
+                    '',
+                title: (data['title'] ?? '').toString().trim(),
+                subtitle: (data['subtitle'] ?? '').toString().trim(),
+                price: (data['price'] as num?)?.toDouble() ?? 0,
+                durationInDays: (data['duration_in_days'] as num?)?.toInt() ?? 0,
+              );
+            }).where((p) => p.planId.isNotEmpty).toList()
+              ..sort((a, b) {
+                final byTitle = a.title.compareTo(b.title);
+                if (byTitle != 0) return byTitle;
+                return a.planId.compareTo(b.planId);
+              });
+
+            return AlertDialog(
+              title: Text(
+                'Set Active Plan — ${user.name ?? user.email ?? 'User'}',
+              ),
+              content: SizedBox(
+                width: 480,
+                child: plans.isEmpty
+                    ? const Padding(
+                        padding: EdgeInsets.symmetric(vertical: 24),
+                        child: Text('No plans found in recharge_plans.'),
+                      )
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: plans.length + 1,
+                        separatorBuilder: (_, _) => const Divider(height: 1),
+                        itemBuilder: (context, index) {
+                          if (index == 0) {
+                            final isSelected =
+                                currentPlanId == null || currentPlanId.isEmpty;
+                            return ListTile(
+                              leading: Icon(
+                                isSelected
+                                    ? Icons.radio_button_checked
+                                    : Icons.radio_button_off,
+                                color: AppColors.primaryGreen,
+                              ),
+                              title: const Text('Free / No plan'),
+                              subtitle: const Text('Clears planId on this user'),
+                              onTap: () async {
+                                Navigator.pop(dialogContext);
+                                await _setUserPlanId(user, null);
+                              },
+                            );
+                          }
+
+                          final plan = plans[index - 1];
+                          final isSelected = currentPlanId == plan.planId;
+                          final title = plan.title.isEmpty
+                              ? plan.planId
+                              : plan.title;
+                          final details = <String>[
+                            'ID: ${plan.planId}',
+                            if (plan.durationInDays > 0)
+                              '${plan.durationInDays} days',
+                            '₹${plan.price.toStringAsFixed(plan.price % 1 == 0 ? 0 : 2)}',
+                          ].join(' · ');
+
+                          return ListTile(
+                            leading: Icon(
+                              isSelected
+                                  ? Icons.radio_button_checked
+                                  : Icons.radio_button_off,
+                              color: AppColors.primaryGreen,
+                            ),
+                            title: Text(
+                              title,
+                              style: TextStyle(
+                                fontWeight: isSelected
+                                    ? FontWeight.w700
+                                    : FontWeight.w500,
+                              ),
+                            ),
+                            subtitle: Text(
+                              [
+                                if (plan.subtitle.isNotEmpty) plan.subtitle,
+                                details,
+                              ].where((s) => s.isNotEmpty).join('\n'),
+                            ),
+                            isThreeLine: plan.subtitle.isNotEmpty,
+                            onTap: () async {
+                              Navigator.pop(dialogContext);
+                              await _setUserPlanId(user, plan.planId);
+                            },
+                          );
+                        },
+                      ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _setUserPlanId(UserModel user, String? planId) async {
+    try {
+      final ref = await _resolveUserDocRef(user);
+      if (ref == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to find user document to update'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      final normalized = _normalizePlanId(planId, allowEmpty: true);
+      await ref.update({
+        'planId': (normalized == null || normalized.isEmpty) ? null : normalized,
+        'updatedAt': DateTime.now(),
+      });
+
+      if (!mounted) return;
+      final label = (normalized == null || normalized.isEmpty)
+          ? 'Free / No plan'
+          : (_rechargePlanTitlesById[normalized] ?? normalized);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Active plan set to $label'),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _fetchUsers();
+    } catch (e) {
+      debugPrint('Error updating planId: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating active plan: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Widget _buildPremiumCustomerRow(UserModel user) {

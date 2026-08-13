@@ -6,6 +6,7 @@ import '../models/customer_info_model.dart';
 import '../models/sub_profile_model.dart';
 import '../models/user_location_model.dart';
 import '../utils/item_list_filters.dart';
+import 'edit_bill_screen.dart';
 
 class _BillLocationOption {
   final String id;
@@ -707,7 +708,7 @@ class _BillsScreenState extends State<BillsScreen> {
           .doc(billDocId)
           .update({
             'last_updated_profile': 'ADMIN',
-            'completed': newStatus,
+            'completed': 1,
             'updated_at': DateTime.now().toIso8601String(),
           });
 
@@ -777,13 +778,13 @@ class _BillsScreenState extends State<BillsScreen> {
   }
 
   void _showBillDetails(BillModel bill) {
-    // Use items from the bill model (extracted from 'items' JSON field)
     final items = bill.items ?? [];
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (context) => DraggableScrollableSheet(
+      builder: (sheetContext) => DraggableScrollableSheet(
         initialChildSize: 0.9,
         minChildSize: 0.5,
         maxChildSize: 0.95,
@@ -827,6 +828,36 @@ class _BillsScreenState extends State<BillsScreen> {
                           ),
                         ],
                       ),
+                    ),
+                    IconButton(
+                      tooltip: 'Edit bill',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () async {
+                        final userDocId = _userDocumentId;
+                        final billDocId = _billDocIds[bill.billCode];
+                        if (userDocId == null || billDocId == null) {
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            const SnackBar(
+                              content: Text('Bill document not found'),
+                            ),
+                          );
+                          return;
+                        }
+                        Navigator.pop(context);
+                        final saved = await Navigator.push<bool>(
+                          this.context,
+                          MaterialPageRoute(
+                            builder: (_) => EditBillScreen(
+                              userDocumentId: userDocId,
+                              billDocId: billDocId,
+                              bill: bill,
+                            ),
+                          ),
+                        );
+                        if (saved == true && mounted) {
+                          await _fetchBills();
+                        }
+                      },
                     ),
                     IconButton(
                       icon: const Icon(Icons.close),
@@ -943,6 +974,12 @@ class _BillsScreenState extends State<BillsScreen> {
                             ),
                             const SizedBox(height: 8),
                             _buildDetailRow('Payment Mode', bill.paymentMode),
+                            const SizedBox(height: 8),
+                            _buildDetailRow(
+                              'Updated At',
+                              DateFormat('dd MMM yyyy, hh:mm a')
+                                  .format(bill.updatedAt),
+                            ),
                           ],
                         ),
                       ),
@@ -969,8 +1006,9 @@ class _BillsScreenState extends State<BillsScreen> {
                         ),
                       )
                     else
-                      ...items.map(
-                        (item) => Card(
+                      ...List.generate(items.length, (index) {
+                        final item = items[index];
+                        return Card(
                           margin: const EdgeInsets.only(bottom: 8),
                           child: ListTile(
                             contentPadding: const EdgeInsets.all(16),
@@ -990,7 +1028,9 @@ class _BillsScreenState extends State<BillsScreen> {
                                 Text(
                                   'Price: ₹${item.price.toStringAsFixed(2)}',
                                 ),
-                                Text('Tax: ${item.taxPerc}%'),
+                                Text(
+                                  'Tax: ${item.taxPerc.toStringAsFixed(2)}%',
+                                ),
                               ],
                             ),
                             trailing: Column(
@@ -1027,8 +1067,8 @@ class _BillsScreenState extends State<BillsScreen> {
                               ],
                             ),
                           ),
-                        ),
-                      ),
+                        );
+                      }),
                     const SizedBox(height: 16),
                     // Summary Card
                     Card(

@@ -7,6 +7,7 @@ import 'package:xeebill_web/models/general_category_model.dart';
 import 'package:xeebill_web/models/subcategory_model.dart';
 import 'package:xeebill_web/screens/add_subcategory_screen.dart';
 import 'package:xeebill_web/screens/general_hsn_gst_rates_screen.dart';
+import 'package:xeebill_web/screens/rate_tax_definition_screen.dart';
 import 'package:xeebill_web/utils/app_colors.dart';
 import 'package:xeebill_web/utils/constants.dart';
 import 'package:xeebill_web/utils/functions.dart';
@@ -255,11 +256,20 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     return _categoryListScrollController.offset;
   }
 
-  List<Map<String, dynamic>> _parseGeneralSubCategoryMapsFromJson(String raw) {
+  List<Map<String, dynamic>> _parseGeneralSubCategoryMapsFromJson(
+    String raw, {
+    required String selectedCategoryCode,
+  }) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) {
       throw const FormatException('JSON cannot be empty');
     }
+
+    final categoryCode = selectedCategoryCode.trim();
+    if (categoryCode.isEmpty) {
+      throw const FormatException('Selected category code is empty');
+    }
+    final requiredPrefix = '$categoryCode-';
 
     final decoded = jsonDecode(trimmed);
     if (decoded is! List) {
@@ -284,6 +294,19 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
       if (code.isEmpty || name.isEmpty) {
         throw FormatException(
           'Item at index $i must include non-empty "code" and "name"',
+        );
+      }
+      if (!code.startsWith(requiredPrefix)) {
+        throw FormatException(
+          'Item at index $i: code "$code" must start with "$requiredPrefix" '
+          '(selected category code is $categoryCode). '
+          'Example: ${requiredPrefix}01',
+        );
+      }
+      if (code == requiredPrefix || code == categoryCode) {
+        throw FormatException(
+          'Item at index $i: code "$code" must include a suffix after '
+          '"$requiredPrefix" (e.g. ${requiredPrefix}01)',
         );
       }
       if (seenCodes.contains(code)) {
@@ -336,14 +359,21 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
 
   Future<void> _showImportSubcategoriesJsonDialog(int index) async {
     final category = _filteredCategories[index];
+    final originalCategory = _categories.firstWhere(
+      (c) => c.code == category.code,
+      orElse: () => category,
+    );
+    final categoryCode = category.code.trim();
+    final subcategoryCount = originalCategory.subcategories.length;
+    final requiredPrefix = '$categoryCode-';
     final jsonController = TextEditingController();
     var isSubmitting = false;
     String? errorText;
 
-    const exampleJson = '''[
+    final exampleJson = '''[
   {
-    "code": "000030-31",
-    "name": "Prawns Dried",
+    "code": "${requiredPrefix}01",
+    "name": "Example Item",
     "attributes": "{\\"Type\\":{\\"Fresh\\":false}}",
     "attribute_types": "",
     "hsn_code": "030695",
@@ -370,6 +400,61 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     mainAxisSize: MainAxisSize.min,
                     children: [
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: AppColors.primaryGreen.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: AppColors.primaryGreen.withValues(alpha: 0.25),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              'Selected category code',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              categoryCode,
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight: FontWeight.w700,
+                                fontFamily: 'monospace',
+                                color: AppColors.primaryGreen,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              subcategoryCount == 1
+                                  ? '1 subcategory currently in this category'
+                                  : '$subcategoryCount subcategories currently in this category',
+                              style: TextStyle(
+                                fontSize: 13,
+                                fontWeight: FontWeight.w600,
+                                color: AppColors.primaryText,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Hint: every subcategory "code" in the JSON must start with '
+                              '"$requiredPrefix" (e.g. ${requiredPrefix}01, ${requiredPrefix}04).',
+                              style: TextStyle(
+                                fontSize: 13,
+                                height: 1.35,
+                                color: AppColors.primaryText,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
                       Text(
                         'Paste a JSON array. Each object is saved as a record in '
                         'general_sub_categories (document id = code).',
@@ -415,6 +500,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                           try {
                             final parsed = _parseGeneralSubCategoryMapsFromJson(
                               jsonController.text,
+                              selectedCategoryCode: categoryCode,
                             );
 
                             // Check which codes already exist.
@@ -1457,6 +1543,30 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                 ),
               );
             },
+          ),
+          PopupMenuButton<String>(
+            tooltip: 'More',
+            icon: Icon(Icons.more_vert, color: AppColors.primaryGreen),
+            onSelected: (value) {
+              if (value == 'rate_tax') {
+                Navigator.push(
+                  context,
+                  MaterialPageRoute(
+                    builder: (context) => const RateTaxDefinitionScreen(),
+                  ),
+                );
+              }
+            },
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'rate_tax',
+                child: ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(Icons.percent_rounded),
+                  title: Text('Rate based tax definition'),
+                ),
+              ),
+            ],
           ),
           IconButton(
             icon: Icon(Icons.verified_user, color: AppColors.primaryGreen),
