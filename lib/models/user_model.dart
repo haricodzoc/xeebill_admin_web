@@ -24,6 +24,8 @@ class UserModel {
   /// Firestore `is_premium_account` (preferred) or legacy `is_premium_account`.
   /// Missing or null is treated as non-premium in the UI.
   final bool? isPremiumCustomer;
+  /// Firestore `enable_service_over_paln`. Missing/null treated as false in UI.
+  final bool? enableServiceOverPlan;
 
   UserModel({
     this.docId,
@@ -46,9 +48,10 @@ class UserModel {
     this.uploadErrorLog,
     this.planId,
     this.isPremiumCustomer,
+    this.enableServiceOverPlan,
   });
 
-  static bool? _readPremiumFlag(dynamic v) {
+  static bool? _readBoolFlag(dynamic v) {
     if (v == null) return null;
     if (v is bool) return v;
     if (v is int) return v != 0;
@@ -59,6 +62,8 @@ class UserModel {
     }
     return null;
   }
+
+  static bool? _readPremiumFlag(dynamic v) => _readBoolFlag(v);
 
   static String? _readPlanId(dynamic v) {
     if (v == null) return null;
@@ -98,7 +103,10 @@ class UserModel {
       uploadErrorLog: data?['uploadErrorLog'] as bool?,
       planId: _readPlanId(data?['planId']),
       isPremiumCustomer: _readPremiumFlag(
-        data?['is_premium_account'] ,
+        data?['is_premium_account'],
+      ),
+      enableServiceOverPlan: _readBoolFlag(
+        data?['enable_service_over_paln'],
       ),
     );
   }

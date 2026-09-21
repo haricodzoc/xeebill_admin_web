@@ -296,16 +296,30 @@ class _RechargePlansScreenState extends State<RechargePlansScreen> {
               children: [
                 _buildInfoChip(
                   Icons.currency_rupee,
-                  '₹${plan.price.toStringAsFixed(2)}',
+                  '₹${plan.price}',
                 ),
                 _buildInfoChip(
                   Icons.percent,
-                  '${plan.discount.toStringAsFixed(1)}% off',
+                  '${plan.discount}% off',
                 ),
                 _buildInfoChip(
                   Icons.calendar_today,
                   '${plan.durationInDays} days',
                 ),
+                _buildInfoChip(Icons.receipt_long, '${plan.bills} bills'),
+                _buildInfoChip(Icons.people_outline, '${plan.customers} customers'),
+                _buildInfoChip(Icons.devices, '${plan.devices} devices'),
+                _buildInfoChip(Icons.inventory_2_outlined, '${plan.items} items'),
+                _buildInfoChip(Icons.build_outlined, '${plan.services} services'),
+                _buildInfoChip(
+                  Icons.location_on_outlined,
+                  '${plan.locationLimit} location${plan.locationLimit == 1 ? '' : 's'}',
+                ),
+                if (plan.backupYear > 0)
+                  _buildInfoChip(
+                    Icons.backup_outlined,
+                    '${plan.backupYear} yr backup',
+                  ),
               ],
             ),
             if (plan.planId.isNotEmpty || plan.subscriptionId.isNotEmpty) ...[

@@ -23,6 +23,15 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
   final TextEditingController _planIdController = TextEditingController();
   final TextEditingController _subscriptionIdController =
       TextEditingController();
+  final TextEditingController _billsController = TextEditingController();
+  final TextEditingController _customersController = TextEditingController();
+  final TextEditingController _devicesController = TextEditingController();
+  final TextEditingController _itemsController = TextEditingController();
+  final TextEditingController _servicesController = TextEditingController();
+  final TextEditingController _locationLimitController =
+      TextEditingController(text: '1');
+  final TextEditingController _backupYearController =
+      TextEditingController(text: '0');
 
   bool _isSaving = false;
 
@@ -30,13 +39,21 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
   void initState() {
     super.initState();
     if (widget.plan != null) {
-      _titleController.text = widget.plan!.title;
-      _subtitleController.text = widget.plan!.subtitle;
-      _priceController.text = widget.plan!.price.toStringAsFixed(2);
-      _discountController.text = widget.plan!.discount.toStringAsFixed(1);
-      _durationController.text = widget.plan!.durationInDays.toString();
-      _planIdController.text = widget.plan!.planId;
-      _subscriptionIdController.text = widget.plan!.subscriptionId;
+      final plan = widget.plan!;
+      _titleController.text = plan.title;
+      _subtitleController.text = plan.subtitle;
+      _priceController.text = plan.price.toString();
+      _discountController.text = plan.discount.toString();
+      _durationController.text = plan.durationInDays.toString();
+      _planIdController.text = plan.planId;
+      _subscriptionIdController.text = plan.subscriptionId;
+      _billsController.text = plan.bills.toString();
+      _customersController.text = plan.customers.toString();
+      _devicesController.text = plan.devices.toString();
+      _itemsController.text = plan.items.toString();
+      _servicesController.text = plan.services.toString();
+      _locationLimitController.text = plan.locationLimit.toString();
+      _backupYearController.text = plan.backupYear.toString();
     }
   }
 
@@ -49,7 +66,24 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
     _durationController.dispose();
     _planIdController.dispose();
     _subscriptionIdController.dispose();
+    _billsController.dispose();
+    _customersController.dispose();
+    _devicesController.dispose();
+    _itemsController.dispose();
+    _servicesController.dispose();
+    _locationLimitController.dispose();
+    _backupYearController.dispose();
     super.dispose();
+  }
+
+  String? _requiredIntValidator(String? value, {required String label}) {
+    if (value == null || value.trim().isEmpty) {
+      return '$label is required';
+    }
+    if (int.tryParse(value.trim()) == null) {
+      return 'Enter a valid whole number';
+    }
+    return null;
   }
 
   Future<void> _savePlan() async {
@@ -65,21 +99,28 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
       final planData = {
         'title': _titleController.text.trim(),
         'subtitle': _subtitleController.text.trim(),
-        'price': double.tryParse(_priceController.text) ?? 0.0,
-        'discount': double.tryParse(_discountController.text) ?? 0.0,
-        'duration_in_days': int.tryParse(_durationController.text) ?? 0,
+        'price': int.parse(_priceController.text.trim()),
+        'discount': int.parse(_discountController.text.trim()),
+        'duration_in_days': int.parse(_durationController.text.trim()),
         'plan_id': _planIdController.text.trim(),
         'subscription_id': _subscriptionIdController.text.trim(),
+        'bills': int.parse(_billsController.text.trim()),
+        'customers': int.parse(_customersController.text.trim()),
+        'devices': int.parse(_devicesController.text.trim()),
+        'items': int.parse(_itemsController.text.trim()),
+        'services': int.parse(_servicesController.text.trim()),
+        'location_limit':
+            int.tryParse(_locationLimitController.text.trim()) ?? 1,
+        'backup_year':
+            int.tryParse(_backupYearController.text.trim()) ?? 0,
       };
 
       if (widget.plan != null) {
-        // Update existing plan
         await _firestore
             .collection('recharge_plans')
             .doc(widget.plan!.id)
             .update(planData);
       } else {
-        // Create new plan
         await _firestore.collection('recharge_plans').add(planData);
       }
 
@@ -110,6 +151,74 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
     }
   }
 
+  Widget _sectionTitle(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12, top: 4),
+      child: Text(
+        text,
+        style: const TextStyle(
+          fontSize: 14,
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+    );
+  }
+
+  Widget _intField({
+    required TextEditingController controller,
+    required String label,
+    String? suffix,
+    String? prefix,
+    bool required = true,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: controller,
+        decoration: InputDecoration(
+          labelText: required ? '$label *' : label,
+          border: const OutlineInputBorder(),
+          suffixText: suffix,
+          prefixText: prefix,
+        ),
+        keyboardType: TextInputType.number,
+        validator: required
+            ? (value) => _requiredIntValidator(value, label: label)
+            : (value) {
+                if (value == null || value.trim().isEmpty) return null;
+                if (int.tryParse(value.trim()) == null) {
+                  return 'Enter a valid whole number';
+                }
+                return null;
+              },
+      ),
+    );
+  }
+
+  Widget _textField({
+    required TextEditingController controller,
+    required String label,
+    int maxLines = 1,
+    bool required = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 16),
+      child: TextFormField(
+        controller: controller,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: required ? '$label *' : label,
+          border: const OutlineInputBorder(),
+          alignLabelWithHint: maxLines > 1,
+        ),
+        validator: required
+            ? (value) =>
+                value?.trim().isEmpty ?? true ? '$label is required' : null
+            : null,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Dialog(
@@ -117,8 +226,8 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
         constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.9,
-          maxWidth: 500,
+          maxHeight: MediaQuery.of(context).size.height * 0.92,
+          maxWidth: 560,
         ),
         padding: const EdgeInsets.all(24),
         child: Form(
@@ -126,7 +235,6 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              // Header
               Row(
                 children: [
                   Text(
@@ -144,119 +252,83 @@ class _EditRechargePlanDialogState extends State<EditRechargePlanDialog> {
                 ],
               ),
               const Divider(),
-              // Form fields
               Flexible(
                 child: SingleChildScrollView(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      // Title
-                      TextFormField(
+                      _sectionTitle('Plan details'),
+                      _textField(
                         controller: _titleController,
-                        decoration: const InputDecoration(
-                          labelText: 'Title *',
-                          border: OutlineInputBorder(),
-                        ),
-                        validator: (value) =>
-                            value?.isEmpty ?? true ? 'Title is required' : null,
+                        label: 'Title',
+                        required: true,
                       ),
-                      const SizedBox(height: 16),
-                      // Subtitle
-                      TextFormField(
+                      _textField(
                         controller: _subtitleController,
-                        decoration: const InputDecoration(
-                          labelText: 'Subtitle',
-                          border: OutlineInputBorder(),
-                        ),
+                        label: 'Subtitle',
+                        maxLines: 3,
                       ),
-                      const SizedBox(height: 16),
-                      // Price
-                      TextFormField(
+                      _intField(
                         controller: _priceController,
-                        decoration: const InputDecoration(
-                          labelText: 'Price *',
-                          border: OutlineInputBorder(),
-                          prefixText: '₹ ',
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        validator: (value) {
-                          if (value?.isEmpty ?? true) {
-                            return 'Price is required';
-                          }
-                          if (double.tryParse(value!) == null) {
-                            return 'Please enter a valid number';
-                          }
-                          return null;
-                        },
+                        label: 'Price',
+                        prefix: '₹ ',
                       ),
-                      const SizedBox(height: 16),
-                      // Discount
-                      TextFormField(
+                      _intField(
                         controller: _discountController,
-                        decoration: const InputDecoration(
-                          labelText: 'Discount (%) *',
-                          border: OutlineInputBorder(),
-                          suffixText: '%',
-                        ),
-                        keyboardType: const TextInputType.numberWithOptions(
-                          decimal: true,
-                        ),
-                        validator: (value) {
-                          if (value?.isEmpty ?? true) {
-                            return 'Discount is required';
-                          }
-                          if (double.tryParse(value!) == null) {
-                            return 'Please enter a valid number';
-                          }
-                          return null;
-                        },
+                        label: 'Discount',
+                        suffix: '%',
                       ),
-                      const SizedBox(height: 16),
-                      // Duration in days
-                      TextFormField(
+                      _intField(
                         controller: _durationController,
-                        decoration: const InputDecoration(
-                          labelText: 'Duration (Days) *',
-                          border: OutlineInputBorder(),
-                          suffixText: 'days',
-                        ),
-                        keyboardType: TextInputType.number,
-                        validator: (value) {
-                          if (value?.isEmpty ?? true) {
-                            return 'Duration is required';
-                          }
-                          if (int.tryParse(value!) == null) {
-                            return 'Please enter a valid number';
-                          }
-                          return null;
-                        },
+                        label: 'Duration in days',
+                        suffix: 'days',
                       ),
-                      const SizedBox(height: 16),
-                      // Plan ID
-                      TextFormField(
+                      _sectionTitle('Identifiers'),
+                      _textField(
                         controller: _planIdController,
-                        decoration: const InputDecoration(
-                          labelText: 'Plan ID',
-                          border: OutlineInputBorder(),
-                        ),
+                        label: 'Plan ID',
                       ),
-                      const SizedBox(height: 16),
-                      // Subscription ID
-                      TextFormField(
+                      _textField(
                         controller: _subscriptionIdController,
-                        decoration: const InputDecoration(
-                          labelText: 'Subscription ID',
-                          border: OutlineInputBorder(),
-                        ),
+                        label: 'Subscription ID',
+                      ),
+                      _sectionTitle('Plan limits'),
+                      _intField(
+                        controller: _billsController,
+                        label: 'Bills',
+                      ),
+                      _intField(
+                        controller: _customersController,
+                        label: 'Customers',
+                      ),
+                      _intField(
+                        controller: _devicesController,
+                        label: 'Devices',
+                      ),
+                      _intField(
+                        controller: _itemsController,
+                        label: 'Items',
+                      ),
+                      _intField(
+                        controller: _servicesController,
+                        label: 'Services',
+                      ),
+                      _intField(
+                        controller: _locationLimitController,
+                        label: 'Location limit',
+                        required: false,
+                      ),
+                      _intField(
+                        controller: _backupYearController,
+                        label: 'Backup year',
+                        suffix: 'years',
+                        required: false,
                       ),
                     ],
                   ),
                 ),
               ),
               const SizedBox(height: 24),
-              // Buttons
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: [

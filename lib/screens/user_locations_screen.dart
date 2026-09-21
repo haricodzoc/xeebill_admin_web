@@ -45,12 +45,20 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
   final Set<String> _savingLocationIds = {};
   final Set<String> _deletingLocationIds = {};
 
+  /// Fallback business fields from the parent user doc (for default location card).
+  String _userBusinessName = '';
+  String _userBusinessAddress = '';
+  int _locationLimit = 1;
+
   @override
   void initState() {
     super.initState();
     if (widget.initialBootstrap != null) {
       _applyBootstrap(widget.initialBootstrap!);
       _loading = false;
+      _loadUserPlanAndBusiness().then((_) {
+        if (mounted) setState(() {});
+      });
     } else {
       _reload();
     }
@@ -65,7 +73,57 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
 
   void _syncSelectionMaps() {
     for (final loc in _locations) {
+      if (loc.isDefault) continue;
       _selectedByLocation[loc.id] = Set<String>.from(loc.subProfileIds);
+    }
+  }
+
+  UserLocationModel? get _defaultLocation {
+    for (final l in _locations) {
+      if (l.isDefault) return l;
+    }
+    return null;
+  }
+
+  List<UserLocationModel> get _additionalLocations =>
+      _locations.where((l) => !l.isDefault).toList();
+
+  Future<void> _loadUserPlanAndBusiness() async {
+    try {
+      final userSnap = await widget.userRef.get();
+      final data = userSnap.data() ?? <String, dynamic>{};
+      _userBusinessName = (data['name'] ?? data['businessName'] ?? '')
+          .toString()
+          .trim();
+      _userBusinessAddress = (data['address'] ?? '').toString().trim();
+
+      final planIdRaw = data['planId'] ?? data['plan_id'];
+      final planId = planIdRaw?.toString().trim() ?? '';
+      if (planId.isEmpty) {
+        _locationLimit = 1;
+        return;
+      }
+
+      final plansSnap = await FirebaseFirestore.instance
+          .collection('recharge_plans')
+          .where('plan_id', isEqualTo: planId)
+          .limit(1)
+          .get();
+      if (plansSnap.docs.isNotEmpty) {
+        final p = plansSnap.docs.first.data();
+        final limit = p['location_limit'];
+        if (limit is num) {
+          _locationLimit = limit.toInt();
+        } else {
+          _locationLimit = int.tryParse(limit?.toString() ?? '') ?? 1;
+        }
+        if (_locationLimit < 1) _locationLimit = 1;
+      } else {
+        _locationLimit = 1;
+      }
+    } catch (e) {
+      debugPrint('Failed loading user plan/business for locations: $e');
+      _locationLimit = 1;
     }
   }
 
@@ -75,6 +133,7 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
       _error = null;
     });
     try {
+      await _loadUserPlanAndBusiness();
       final locSnap = await widget.userRef.collection('locations').get();
       final subSnap = await widget.userRef.collection('subProfiles').get();
 
@@ -86,7 +145,10 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
           debugPrint('Parse location ${d.id}: $e');
         }
       }
-      locs.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+      locs.sort((a, b) {
+        if (a.isDefault != b.isDefault) return a.isDefault ? -1 : 1;
+        return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      });
 
       final subs = <SubProfileModel>[];
       for (final d in subSnap.docs) {
@@ -147,6 +209,7 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
           gstType: old.gstType,
           address: old.address,
           subProfileIds: selected.toList(),
+          isDefault: old.isDefault,
         );
       }
     } catch (e) {
@@ -160,14 +223,91 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     }
   }
 
+  Future<int> _countItemsMappedToLocation(String locationId) async {
+    try {
+      final snap = await widget.userRef
+          .collection('items')
+          .where('location_id', isEqualTo: locationId)
+          .get();
+      return snap.docs.length;
+    } catch (e) {
+      debugPrint('Failed counting items for location $locationId: $e');
+      // Fallback: scan a bounded set if index/query fails
+      try {
+        final all = await widget.userRef.collection('items').limit(2000).get();
+        var count = 0;
+        for (final d in all.docs) {
+          final data = d.data();
+          final id = (data['location_id'] ?? data['locationId'] ?? '')
+              .toString()
+              .trim();
+          if (id == locationId) count++;
+        }
+        return count;
+      } catch (_) {
+        return 0;
+      }
+    }
+  }
+
+  Future<bool> _ensureCanAddLocation() async {
+    final currentCount = _additionalLocations.length;
+    // location_limit is total allowed additional locations (plan default 1).
+    if (currentCount < _locationLimit) return true;
+    if (!mounted) return false;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text(
+          'You have reached the maximum number of locations allowed in the current plan',
+        ),
+        backgroundColor: Colors.orange,
+      ),
+    );
+    return false;
+  }
+
   Future<void> _confirmDeleteLocation(UserLocationModel location) async {
+    if (location.isDefault) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Default location cannot be deleted'),
+          backgroundColor: Colors.orange,
+        ),
+      );
+      return;
+    }
+
+    final linkedCount = await _countItemsMappedToLocation(location.id);
+    if (!mounted) return;
+
+    if (linkedCount > 0) {
+      await showDialog<void>(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: const Text('Cannot delete location'),
+          content: Text(
+            '"${location.name}" has $linkedCount item(s) mapped to it. '
+            'Remove or reassign those items before deleting this location.',
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: const Text('OK'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
         title: const Text('Delete location?'),
         content: Text(
-          'Delete "${location.name}"? This cannot be undone.',
+          'No items are mapped to "${location.name}". This action cannot be undone.',
         ),
         actions: [
           TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
@@ -202,6 +342,133 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     }
   }
 
+  Future<void> _showDefaultLocationNameModal(UserLocationModel defaultLocation) async {
+    final nameController = TextEditingController(text: defaultLocation.name);
+    final formKey = GlobalKey<FormState>();
+    var saving = false;
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        return StatefulBuilder(
+          builder: (ctx, setModalState) {
+            return Padding(
+              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              child: Container(
+                decoration: const BoxDecoration(
+                  color: Colors.white,
+                  borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+                ),
+                padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
+                child: Form(
+                  key: formKey,
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      const Text(
+                        'Edit default location',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                      ),
+                      const SizedBox(height: 8),
+                      Text(
+                        'Items without a mapped location use this name.',
+                        style: TextStyle(fontSize: 13, color: AppColors.primaryGrey),
+                      ),
+                      const SizedBox(height: 16),
+                      TextFormField(
+                        controller: nameController,
+                        decoration: const InputDecoration(
+                          labelText: 'Location name',
+                          border: OutlineInputBorder(),
+                        ),
+                        validator: (value) {
+                          if (value == null || value.trim().isEmpty) {
+                            return 'Location name is required';
+                          }
+                          return null;
+                        },
+                      ),
+                      const SizedBox(height: 20),
+                      ElevatedButton(
+                        onPressed: saving
+                            ? null
+                            : () async {
+                                if (!formKey.currentState!.validate()) return;
+                                setModalState(() => saving = true);
+                                try {
+                                  final name = nameController.text.trim();
+                                  await widget.userRef
+                                      .collection('locations')
+                                      .doc(defaultLocation.id)
+                                      .set({
+                                    'name': name,
+                                    'updatedAt': FieldValue.serverTimestamp(),
+                                  }, SetOptions(merge: true));
+                                  final idx = _locations
+                                      .indexWhere((l) => l.id == defaultLocation.id);
+                                  if (idx >= 0) {
+                                    final old = _locations[idx];
+                                    _locations[idx] = UserLocationModel(
+                                      id: old.id,
+                                      name: name,
+                                      businessName: old.businessName,
+                                      businessPhoneNumber: old.businessPhoneNumber,
+                                      businessGstNumber: old.businessGstNumber,
+                                      gstType: old.gstType,
+                                      address: old.address,
+                                      subProfileIds: old.subProfileIds,
+                                      isDefault: true,
+                                    );
+                                  }
+                                  if (mounted) setState(() {});
+                                  if (ctx.mounted) Navigator.pop(ctx);
+                                } catch (e) {
+                                  if (ctx.mounted) {
+                                    ScaffoldMessenger.of(ctx).showSnackBar(
+                                      SnackBar(
+                                        content: Text('Failed to update name: $e'),
+                                        backgroundColor: Colors.red,
+                                      ),
+                                    );
+                                  }
+                                } finally {
+                                  if (ctx.mounted) {
+                                    setModalState(() => saving = false);
+                                  }
+                                }
+                              },
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: AppColors.primaryGreen,
+                          foregroundColor: Colors.white,
+                          padding: const EdgeInsets.symmetric(vertical: 14),
+                        ),
+                        child: saving
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                  color: Colors.white,
+                                ),
+                              )
+                            : const Text('Save'),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+
+    nameController.dispose();
+  }
+
   Future<void> _showLocationModal({String? locationId}) async {
     UserLocationModel? existing;
     if (locationId != null) {
@@ -225,6 +492,10 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     const gstChoices = ['Regular', 'Composition', 'Unregistered'];
     if (!gstChoices.contains(selectedGstType)) {
       selectedGstType = 'Regular';
+    }
+    final initialGstT = selectedGstType.trim().toLowerCase();
+    if (initialGstT != 'regular' && initialGstT != 'composition') {
+      businessGstController.text = '';
     }
 
     final formKey = GlobalKey<FormState>();
@@ -381,10 +652,12 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                                 try {
                                   if (existing == null) {
                                     payload['subProfileIds'] = <String>[];
+                                    payload['isDefault'] = false;
                                     payload['createdAt'] = FieldValue.serverTimestamp();
                                     await widget.userRef.collection('locations').add(payload);
                                   } else {
                                     payload['subProfileIds'] = existing.subProfileIds;
+                                    payload['isDefault'] = existing.isDefault;
                                     await widget.userRef
                                         .collection('locations')
                                         .doc(existing.id)
@@ -494,174 +767,313 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                   ),
                   const SizedBox(height: 16),
                   Expanded(
-                    child: _locations.isEmpty
-                        ? Center(
-                            child: Text(
-                              'No locations added yet',
-                              style: TextStyle(fontSize: 13, color: AppColors.primaryGrey),
+                    child: ListView(
+                      children: [
+                        if (_defaultLocation != null)
+                          _buildDefaultLocationCard(_defaultLocation!),
+                        if (_additionalLocations.isEmpty)
+                          Padding(
+                            padding: const EdgeInsets.only(top: 24),
+                            child: Center(
+                              child: Text(
+                                'No additional locations added yet',
+                                style: TextStyle(
+                                  fontSize: 13,
+                                  color: AppColors.primaryGrey,
+                                ),
+                              ),
                             ),
                           )
-                        : ListView.builder(
-                            itemCount: _locations.length,
-                            itemBuilder: (context, index) {
-                              final location = _locations[index];
-                              final selected = _selectedByLocation.putIfAbsent(
-                                location.id,
-                                () => Set<String>.from(location.subProfileIds),
-                              );
-                              if (selected.isEmpty && location.subProfileIds.isNotEmpty) {
-                                selected.addAll(location.subProfileIds);
-                              }
-
-                              final saving = _savingLocationIds.contains(location.id);
-                              final deleting = _deletingLocationIds.contains(location.id);
-
-                              return Container(
-                                margin: const EdgeInsets.only(bottom: 12),
-                                padding: const EdgeInsets.all(12),
-                                decoration: BoxDecoration(
-                                  color: Colors.white,
-                                  borderRadius: BorderRadius.circular(12),
-                                  border: Border.all(color: _border),
-                                ),
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: [
-                                    Row(
-                                      children: [
-                                        Expanded(
-                                          child: Text(
-                                            location.name,
-                                            style: TextStyle(
-                                              fontSize: 14,
-                                              fontWeight: FontWeight.w600,
-                                              color: AppColors.primaryText,
-                                            ),
-                                          ),
-                                        ),
-                                        IconButton(
-                                          onPressed: saving || deleting
-                                              ? null
-                                              : () => _showLocationModal(locationId: location.id),
-                                          icon: Icon(
-                                            Icons.edit_outlined,
-                                            color: saving || deleting ? AppColors.primaryGrey : AppColors.primaryText,
-                                          ),
-                                        ),
-                                        IconButton(
-                                          onPressed: saving || deleting
-                                              ? null
-                                              : () => _confirmDeleteLocation(location),
-                                          icon: deleting
-                                              ? const SizedBox(
-                                                  width: 22,
-                                                  height: 22,
-                                                  child: CircularProgressIndicator(strokeWidth: 2),
-                                                )
-                                              : Icon(Icons.delete_outline_rounded, color: AppColors.primaryRed),
-                                        ),
-                                      ],
-                                    ),
-                                    const SizedBox(height: 8),
-                                    if (location.gstType.isNotEmpty)
-                                      Text(
-                                        'GST Type: ${location.gstType}',
-                                        style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
-                                      ),
-                                    if (location.businessName.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'Business: ${location.businessName}',
-                                        style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
-                                      ),
-                                    ],
-                                    if (location.businessPhoneNumber.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'Phone: ${location.businessPhoneNumber}',
-                                        style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
-                                      ),
-                                    ],
-                                    if (location.businessGstNumber.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Text(
-                                        'GST No: ${location.businessGstNumber}',
-                                        style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
-                                      ),
-                                    ],
-                                    if (location.address.isNotEmpty) ...[
-                                      const SizedBox(height: 4),
-                                      Row(
-                                        crossAxisAlignment: CrossAxisAlignment.start,
-                                        children: [
-                                          Padding(
-                                            padding: const EdgeInsets.only(top: 1),
-                                            child: Icon(Icons.location_on_outlined, size: 14, color: AppColors.primaryGrey),
-                                          ),
-                                          const SizedBox(width: 4),
-                                          Expanded(
-                                            child: Text(
-                                              location.address,
-                                              style: TextStyle(
-                                                fontSize: 12,
-                                                color: AppColors.primaryGrey,
-                                                height: 1.4,
-                                              ),
-                                            ),
-                                          ),
-                                        ],
-                                      ),
-                                    ],
-                                    const SizedBox(height: 10),
-                                    Wrap(
-                                      spacing: 8,
-                                      runSpacing: 8,
-                                      children: mappable.map((profile) {
-                                        final isSelected = selected.contains(profile.id);
-                                        final blockedElsewhere =
-                                            _isMappedElsewhere(location.id, profile.id) && !isSelected;
-                                        final saving = _savingLocationIds.contains(location.id);
-
-                                        return FilterChip(
-                                          label: Text('${profile.name} (${profile.code})'),
-                                          selected: isSelected,
-                                          showCheckmark: true,
-                                          backgroundColor: AppColors.backgroundSuccess,
-                                          selectedColor: AppColors.highlightGreen,
-                                          checkmarkColor: AppColors.successGreen,
-                                          side: BorderSide(
-                                            color: isSelected ? AppColors.successGreen : _border,
-                                          ),
-                                          onSelected: (blockedElsewhere && !isSelected) || saving
-                                              ? null
-                                              : (val) async {
-                                                  setState(() {
-                                                    if (val) {
-                                                      selected.add(profile.id);
-                                                    } else {
-                                                      selected.remove(profile.id);
-                                                    }
-                                                  });
-                                                  await _updateMappings(location.id, Set<String>.from(selected));
-                                                },
-                                        );
-                                      }).toList(),
-                                    ),
-                                  ],
-                                ),
-                              );
-                            },
+                        else
+                          ..._additionalLocations.map(
+                            (location) => _buildAdditionalLocationCard(
+                              location,
+                              mappable,
+                            ),
                           ),
+                      ],
+                    ),
                   ),
                 ],
               ),
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () => _showLocationModal(),
+        onPressed: () async {
+          if (!await _ensureCanAddLocation()) return;
+          await _showLocationModal();
+        },
         backgroundColor: AppColors.primaryGreen,
         foregroundColor: AppColors.primaryWhite,
         shape: const CircleBorder(),
         child: const Icon(Icons.add),
+      ),
+    );
+  }
+
+  Widget _buildDefaultLocationCard(UserLocationModel defaultLocation) {
+    final saving = _savingLocationIds.contains(defaultLocation.id);
+    final displayAddress = defaultLocation.address.trim().isNotEmpty
+        ? defaultLocation.address.trim()
+        : _userBusinessAddress;
+    final displayBusinessName = defaultLocation.businessName.trim().isNotEmpty
+        ? defaultLocation.businessName.trim()
+        : _userBusinessName;
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: _brand50,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _brand100),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  defaultLocation.name,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primaryText,
+                  ),
+                ),
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                decoration: BoxDecoration(
+                  color: AppColors.highlightGreen,
+                  borderRadius: BorderRadius.circular(999),
+                ),
+                child: Text(
+                  'Default',
+                  style: TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.successGreen,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: saving
+                    ? null
+                    : () => _showDefaultLocationNameModal(defaultLocation),
+                icon: Icon(
+                  Icons.edit_outlined,
+                  color: saving ? AppColors.primaryGrey : AppColors.primaryText,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            'Uses your main business address. Items not assigned to another location appear under this name.',
+            style: TextStyle(
+              fontSize: 12,
+              color: AppColors.primaryGrey,
+              height: 1.4,
+            ),
+          ),
+          if (displayBusinessName.isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Business: $displayBusinessName',
+              style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
+            ),
+          ],
+          if (displayAddress.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    Icons.location_on_outlined,
+                    size: 14,
+                    color: AppColors.primaryGrey,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    displayAddress,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.primaryGrey,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Widget _buildAdditionalLocationCard(
+    UserLocationModel location,
+    List<SubProfileModel> mappable,
+  ) {
+    final selected = _selectedByLocation.putIfAbsent(
+      location.id,
+      () => Set<String>.from(location.subProfileIds),
+    );
+    if (selected.isEmpty && location.subProfileIds.isNotEmpty) {
+      selected.addAll(location.subProfileIds);
+    }
+
+    final saving = _savingLocationIds.contains(location.id);
+    final deleting = _deletingLocationIds.contains(location.id);
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 12),
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: _border),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  location.name,
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.primaryText,
+                  ),
+                ),
+              ),
+              IconButton(
+                onPressed: saving || deleting
+                    ? null
+                    : () => _showLocationModal(locationId: location.id),
+                icon: Icon(
+                  Icons.edit_outlined,
+                  color: saving || deleting
+                      ? AppColors.primaryGrey
+                      : AppColors.primaryText,
+                ),
+              ),
+              IconButton(
+                onPressed: saving || deleting
+                    ? null
+                    : () => _confirmDeleteLocation(location),
+                icon: deleting
+                    ? const SizedBox(
+                        width: 22,
+                        height: 22,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : Icon(
+                        Icons.delete_outline_rounded,
+                        color: AppColors.primaryRed,
+                      ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          if (location.gstType.isNotEmpty)
+            Text(
+              'GST Type: ${location.gstType}',
+              style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
+            ),
+          if (location.businessName.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Business: ${location.businessName}',
+              style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
+            ),
+          ],
+          if (location.businessPhoneNumber.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Phone: ${location.businessPhoneNumber}',
+              style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
+            ),
+          ],
+          if (location.businessGstNumber.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Text(
+              'GST No: ${location.businessGstNumber}',
+              style: TextStyle(fontSize: 12, color: AppColors.primaryGrey),
+            ),
+          ],
+          if (location.address.isNotEmpty) ...[
+            const SizedBox(height: 4),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(top: 1),
+                  child: Icon(
+                    Icons.location_on_outlined,
+                    size: 14,
+                    color: AppColors.primaryGrey,
+                  ),
+                ),
+                const SizedBox(width: 4),
+                Expanded(
+                  child: Text(
+                    location.address,
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: AppColors.primaryGrey,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+          const SizedBox(height: 10),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: mappable.map((profile) {
+              final isSelected = selected.contains(profile.id);
+              final blockedElsewhere =
+                  _isMappedElsewhere(location.id, profile.id) && !isSelected;
+
+              return FilterChip(
+                label: Text('${profile.name} (${profile.code})'),
+                selected: isSelected,
+                showCheckmark: true,
+                backgroundColor: AppColors.backgroundSuccess,
+                selectedColor: AppColors.highlightGreen,
+                checkmarkColor: AppColors.successGreen,
+                side: BorderSide(
+                  color: isSelected ? AppColors.successGreen : _border,
+                ),
+                onSelected: (blockedElsewhere && !isSelected) || saving
+                    ? null
+                    : (val) async {
+                        setState(() {
+                          if (val) {
+                            selected.add(profile.id);
+                          } else {
+                            selected.remove(profile.id);
+                          }
+                        });
+                        await _updateMappings(
+                          location.id,
+                          Set<String>.from(selected),
+                        );
+                      },
+              );
+            }).toList(),
+          ),
+        ],
       ),
     );
   }
@@ -679,7 +1091,10 @@ Future<UserLocationsBootstrap> loadUserLocationsBootstrap(
       locs.add(UserLocationModel.fromFirestore(d));
     } catch (_) {}
   }
-  locs.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+  locs.sort((a, b) {
+    if (a.isDefault != b.isDefault) return a.isDefault ? -1 : 1;
+    return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+  });
 
   final subs = <SubProfileModel>[];
   for (final d in subSnap.docs) {

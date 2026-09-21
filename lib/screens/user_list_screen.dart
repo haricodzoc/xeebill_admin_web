@@ -896,6 +896,7 @@ class _UserListScreenState extends State<UserListScreen> {
                       _buildInfoRow('GST Number', user.gstNumber ?? 'N/A'),
                       _buildActivePlanRow(user, activePlanName),
                       _buildPremiumCustomerRow(user),
+                      _buildEnableServiceOverPlanRow(user),
                       _buildActiveDeviceRow(user),
                       _buildAccountExpiryRow(user),
                       _buildInfoRow(
@@ -2388,6 +2389,94 @@ class _UserListScreenState extends State<UserListScreen> {
         ],
       ),
     );
+  }
+
+  Widget _buildEnableServiceOverPlanRow(UserModel user) {
+    final enabled = user.enableServiceOverPlan == true;
+
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4.0),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          SizedBox(
+            width: 120,
+            child: Text(
+              'Service over plan:',
+              style: TextStyle(
+                fontWeight: FontWeight.w500,
+                color: Colors.grey[700],
+                fontSize: 13,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Row(
+              children: [
+                Expanded(
+                  child: Text(
+                    enabled ? 'Yes' : 'No',
+                    style: TextStyle(
+                      color: enabled ? AppColors.primaryGreen : Colors.black87,
+                      fontSize: 13,
+                      fontWeight:
+                          enabled ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  ),
+                ),
+                Switch.adaptive(
+                  value: enabled,
+                  onChanged: (v) => _setEnableServiceOverPlan(user, v),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setEnableServiceOverPlan(UserModel user, bool value) async {
+    try {
+      final ref = await _resolveUserDocRef(user);
+      if (ref == null) {
+        if (!mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Unable to find user document to update'),
+            backgroundColor: Colors.red,
+          ),
+        );
+        return;
+      }
+
+      await ref.update({
+        'enable_service_over_paln': value,
+        'updatedAt': DateTime.now(),
+      });
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            value
+                ? 'Service over plan enabled'
+                : 'Service over plan disabled',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+      await _fetchUsers();
+    } catch (e) {
+      debugPrint('Error updating enable_service_over_paln: $e');
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Error updating service over plan: $e'),
+          backgroundColor: Colors.red,
+        ),
+      );
+    }
   }
 
   Future<void> _setPremiumCustomer(UserModel user, bool value) async {

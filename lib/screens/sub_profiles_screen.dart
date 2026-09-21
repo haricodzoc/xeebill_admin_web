@@ -644,6 +644,8 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Dashboard': false,
     'Contacts': false,
     'Services': false,
+    'Notifications': false,
+    'Purchase Entry': false,
     'Button': false,
   };
   final Map<String, bool> _itemsOptions = {
@@ -653,6 +655,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Delete items': false,
     'Map items': false,
     'Print label': false,
+    'Edit label templates': false,
     'Item Location': false,
   };
   final Map<String, bool> _categoriesOptions = {
@@ -680,6 +683,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
   final Map<String, bool> _billsOptions = {
     'View all bills': false,
     'View profile bills only': false,
+    'Edit bill templates': false,
   };
 
   @override
@@ -849,7 +853,8 @@ class _SubProfileCardState extends State<SubProfileCard> {
         _reportsOptions.values.every((v) => v) &&
         _dashBoardOptions.values.every((v) => v) &&
         _servicesOptions.values.every((v) => v) &&
-        _billsOptions['View all bills'] == true;
+        _billsOptions['View all bills'] == true &&
+        _billsOptions['Edit bill templates'] == true;
   }
 
   bool? get _selectAllCheckboxValue {
@@ -898,6 +903,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
       if (selected) {
         _billsOptions['View all bills'] = true;
         _billsOptions['View profile bills only'] = false;
+        _billsOptions['Edit bill templates'] = true;
       } else {
         _billsOptions[key] = false;
       }
@@ -1457,8 +1463,14 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                                       _billsOptions[
                                                           'View all bills'] = false;
                                                       _billsOptions[sub] = true;
-                                                    } else {
+                                                    } else if (sub ==
+                                                            'View all bills' ||
+                                                        sub ==
+                                                            'View profile bills only') {
                                                       _billsOptions[sub] = false;
+                                                    } else {
+                                                      _billsOptions[sub] =
+                                                          checked;
                                                     }
                                                   });
                                                 },
