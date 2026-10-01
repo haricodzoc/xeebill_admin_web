@@ -55,24 +55,37 @@ class BillItem {
   }
 
   factory BillItem.fromMap(Map<String, dynamic> map) {
+    double asDouble(dynamic v) {
+      if (v == null) return 0.0;
+      if (v is num) return v.toDouble();
+      return double.tryParse(v.toString()) ?? 0.0;
+    }
+
+    String asString(dynamic v) => v?.toString() ?? '';
+
     return BillItem(
       id: (map['id'] as num?)?.toInt(),
-      billId: (map['bill_id'] as num?)?.toInt() ?? 0,
-      code: map['code']?.toString() ?? '',
-      name: map['name']?.toString() ?? '',
-      unit: map['unit']?.toString() ?? '',
-      hsnCode: map['hsn_code']?.toString() ?? '',
-      price: (map['price'] as num?)?.toDouble() ?? 0.0,
-      quantity: (map['quantity'] as num?)?.toDouble() ?? 0.0,
-      returnQuantity: (map['return_quantity'] as num?)?.toDouble() ?? 0.0,
-      total: (map['total'] as num?)?.toDouble() ?? 0.0,
-      taxPerc: (map['tax_perc'] as num?)?.toDouble() ?? 0.0,
-      totalAfterTax: (map['total_after_tax'] as num?)?.toDouble() ?? 0.0,
-      isReturned: map['is_returned'] == 1 || map['is_returned'] == true,
-      categoryCode:
-          map['category_code']?.toString() ??
-          map['category_id']?.toString() ??
-          '',
+      billId: (map['bill_id'] as num?)?.toInt() ??
+          (map['billId'] as num?)?.toInt() ??
+          0,
+      code: asString(map['code']),
+      name: asString(map['name']),
+      unit: asString(map['unit']),
+      hsnCode: asString(map['hsn_code'] ?? map['hsnCode']),
+      price: asDouble(map['price']),
+      quantity: asDouble(map['quantity']),
+      returnQuantity: asDouble(map['return_quantity'] ?? map['returnQuantity']),
+      total: asDouble(map['total']),
+      taxPerc: asDouble(map['tax_perc'] ?? map['taxPerc']),
+      totalAfterTax: asDouble(map['total_after_tax'] ?? map['totalAfterTax']),
+      isReturned: map['is_returned'] == 1 ||
+          map['is_returned'] == true ||
+          map['isReturned'] == true,
+      categoryCode: asString(
+        map['category_code'] ?? map['categoryCode'] ?? map['category_id'],
+      ),
+      originalQuantity:
+          asDouble(map['original_quantity'] ?? map['originalQuantity']),
     );
   }
 }

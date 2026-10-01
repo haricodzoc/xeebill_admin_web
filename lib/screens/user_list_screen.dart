@@ -1208,7 +1208,11 @@ class _UserListScreenState extends State<UserListScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => ReportsScreen(userId: user.userId ?? ''),
+        builder: (context) => ReportsScreen(
+          userId: user.userId ?? user.docId ?? '',
+          userDocId: user.docId,
+          userName: user.name,
+        ),
       ),
     );
   }
