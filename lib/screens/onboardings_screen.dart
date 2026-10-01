@@ -189,6 +189,257 @@ class _OnboardingsScreenState extends State<OnboardingsScreen> {
     return DateFormat('dd MMM yyyy').format(date);
   }
 
+  String _formatRemarkStamp(OnboardingRemark note) {
+    final stamp = DateFormat('dd MMM yyyy, HH:mm').format(
+      note.wasEdited ? note.updatedAt : note.createdAt,
+    );
+    return note.wasEdited ? 'Updated $stamp' : 'Added $stamp';
+  }
+
+  Future<void> _saveRemarkNotes(
+    OnboardingModel item,
+    List<OnboardingRemark> notes,
+  ) async {
+    final now = DateTime.now();
+    final joined = notes.map((note) => note.text).join('\n');
+    await _firestore.collection('onboardings').doc(item.id).set({
+      'remarks': joined,
+      'remarkNotes': notes.map((note) => note.toMap()).toList(),
+      'updatedAt': Timestamp.fromDate(now),
+    }, SetOptions(merge: true));
+    if (!mounted) return;
+    setState(() {
+      final index = _items.indexWhere((e) => e.id == item.id);
+      if (index != -1) {
+        _items[index] = item.copyWith(
+          remarks: joined,
+          remarkNotes: notes,
+          updatedAt: now,
+        );
+      }
+    });
+    _applyFilters();
+  }
+
+  Future<void> _promptRemark({
+    required OnboardingModel item,
+    OnboardingRemark? existing,
+  }) async {
+    final controller = TextEditingController(text: existing?.text ?? '');
+    final saved = await showDialog<bool>(
+      context: context,
+      builder: (dialogContext) {
+        var saving = false;
+        return StatefulBuilder(
+          builder: (dialogContext, setDialogState) {
+            return AlertDialog(
+              title: Text(existing == null ? 'Add remark' : 'Edit remark'),
+              content: TextField(
+                controller: controller,
+                autofocus: true,
+                minLines: 3,
+                maxLines: 6,
+                decoration: const InputDecoration(
+                  labelText: 'Remark',
+                  alignLabelWithHint: true,
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: saving
+                      ? null
+                      : () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: saving
+                      ? null
+                      : () async {
+                          final text = controller.text.trim();
+                          if (text.isEmpty) return;
+                          setDialogState(() => saving = true);
+                          try {
+                            final now = DateTime.now();
+                            final notes = List<OnboardingRemark>.from(
+                              item.remarkNotes,
+                            );
+                            if (existing == null) {
+                              notes.insert(
+                                0,
+                                OnboardingRemark(
+                                  id: now.microsecondsSinceEpoch.toString(),
+                                  text: text,
+                                  createdAt: now,
+                                  updatedAt: now,
+                                ),
+                              );
+                            } else {
+                              final index = notes.indexWhere(
+                                (note) => note.id == existing.id,
+                              );
+                              final updated = existing.copyWith(
+                                text: text,
+                                updatedAt: now,
+                              );
+                              if (index == -1) {
+                                notes.insert(0, updated);
+                              } else {
+                                notes[index] = updated;
+                              }
+                            }
+                            await _saveRemarkNotes(item, notes);
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext, true);
+                            }
+                          } catch (e) {
+                            setDialogState(() => saving = false);
+                            if (dialogContext.mounted) {
+                              ScaffoldMessenger.of(dialogContext).showSnackBar(
+                                SnackBar(
+                                  content: Text('Failed to save remark: $e'),
+                                  backgroundColor: Colors.red,
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: Text(saving ? 'Saving…' : 'Save'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+    controller.dispose();
+    if (saved == true && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            existing == null ? 'Remark added' : 'Remark updated',
+          ),
+          backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Widget _buildRemarksSection(
+    OnboardingModel item, {
+    VoidCallback? onChanged,
+  }) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        Row(
+          children: [
+            Expanded(child: _sectionLabel('Remarks')),
+            TextButton.icon(
+              onPressed: () async {
+                await _promptRemark(item: item);
+                onChanged?.call();
+              },
+              icon: const Icon(Icons.add, size: 18),
+              label: const Text('Add'),
+              style: TextButton.styleFrom(
+                foregroundColor: AppColors.primaryGreen,
+                visualDensity: VisualDensity.compact,
+              ),
+            ),
+          ],
+        ),
+        if (item.remarkNotes.isEmpty)
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F9FB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE8ECF0)),
+            ),
+            child: Text(
+              'No remarks yet',
+              style: TextStyle(fontSize: 13, color: Colors.grey[600]),
+            ),
+          )
+        else
+          Container(
+            decoration: BoxDecoration(
+              color: const Color(0xFFF8F9FB),
+              borderRadius: BorderRadius.circular(12),
+              border: Border.all(color: const Color(0xFFE8ECF0)),
+            ),
+            child: Column(
+              children: [
+                for (var i = 0; i < item.remarkNotes.length; i++) ...[
+                  if (i > 0)
+                    const Divider(height: 1, color: Color(0xFFE8ECF0)),
+                  Padding(
+                    padding: const EdgeInsets.fromLTRB(14, 10, 4, 10),
+                    child: Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        const Padding(
+                          padding: EdgeInsets.only(top: 2),
+                          child: Icon(
+                            Icons.notes_outlined,
+                            size: 18,
+                            color: Color(0xFF6B7280),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text(
+                                item.remarkNotes[i].text,
+                                style: const TextStyle(
+                                  fontSize: 14,
+                                  height: 1.35,
+                                  color: Color(0xFF1F2933),
+                                ),
+                              ),
+                              const SizedBox(height: 4),
+                              Text(
+                                _formatRemarkStamp(item.remarkNotes[i]),
+                                style: TextStyle(
+                                  fontSize: 12,
+                                  color: Colors.grey[600],
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        IconButton(
+                          tooltip: 'Edit remark',
+                          onPressed: () async {
+                            await _promptRemark(
+                              item: item,
+                              existing: item.remarkNotes[i],
+                            );
+                            onChanged?.call();
+                          },
+                          icon: const Icon(Icons.edit_outlined, size: 18),
+                          color: AppColors.primaryGreen,
+                          visualDensity: VisualDensity.compact,
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+
   Future<void> _pickAndSaveDate({
     required OnboardingModel item,
     required String field,
@@ -725,13 +976,26 @@ class _OnboardingsScreenState extends State<OnboardingsScreen> {
                           setDialogState(() => isSaving = true);
                           try {
                             final now = DateTime.now();
+                            final remarkText = remarksController.text.trim();
+                            final remarkNotes = remarkText.isEmpty
+                                ? <Map<String, dynamic>>[]
+                                : [
+                                    {
+                                      'id': now.microsecondsSinceEpoch
+                                          .toString(),
+                                      'text': remarkText,
+                                      'createdAt': Timestamp.fromDate(now),
+                                      'updatedAt': Timestamp.fromDate(now),
+                                    },
+                                  ];
                             await _firestore.collection('onboardings').add({
                               'name': nameController.text.trim(),
                               'phone': phoneController.text.trim(),
                               'shopType': shopType?.trim() ?? '',
                               'address': addressController.text.trim(),
                               'location': locationController.text.trim(),
-                              'remarks': remarksController.text.trim(),
+                              'remarks': remarkText,
+                              'remarkNotes': remarkNotes,
                               'status': status.firestoreValue,
                               'recentEnquiryDate': recentEnquiryDate == null
                                   ? null
@@ -946,16 +1210,20 @@ class _OnboardingsScreenState extends State<OnboardingsScreen> {
                               ? null
                               : () => _openInGoogleMaps(item.location),
                         ),
-                        if (item.remarks.isNotEmpty) ...[
-                          const Divider(height: 1, color: Color(0xFFE8ECF0)),
-                          _DetailRow(
-                            icon: Icons.notes_outlined,
-                            label: 'Remarks',
-                            value: item.remarks,
-                          ),
-                        ],
                       ],
                     ),
+                  ),
+                  const SizedBox(height: 20),
+                  StatefulBuilder(
+                    builder: (context, setSheetState) {
+                      final index =
+                          _items.indexWhere((entry) => entry.id == item.id);
+                      final current = index == -1 ? item : _items[index];
+                      return _buildRemarksSection(
+                        current,
+                        onChanged: () => setSheetState(() {}),
+                      );
+                    },
                   ),
                   const SizedBox(height: 20),
                   _sectionLabel('Schedule'),
@@ -1354,6 +1622,8 @@ class _OnboardingsScreenState extends State<OnboardingsScreen> {
                         ),
                       ],
                     ),
+                    const SizedBox(height: 12),
+                    _buildRemarksSection(item),
                   ],
                 ),
               ),

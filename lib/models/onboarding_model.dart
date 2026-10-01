@@ -83,6 +83,60 @@ const List<String> kOnboardingShopTypes = [
   'Others',
 ];
 
+class OnboardingRemark {
+  final String id;
+  final String text;
+  final DateTime createdAt;
+  final DateTime updatedAt;
+
+  const OnboardingRemark({
+    required this.id,
+    required this.text,
+    required this.createdAt,
+    required this.updatedAt,
+  });
+
+  bool get wasEdited =>
+      updatedAt.difference(createdAt).inSeconds.abs() > 1;
+
+  Map<String, dynamic> toMap() {
+    return {
+      'id': id,
+      'text': text,
+      'createdAt': Timestamp.fromDate(createdAt),
+      'updatedAt': Timestamp.fromDate(updatedAt),
+    };
+  }
+
+  OnboardingRemark copyWith({
+    String? text,
+    DateTime? updatedAt,
+  }) {
+    return OnboardingRemark(
+      id: id,
+      text: text ?? this.text,
+      createdAt: createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+
+  static OnboardingRemark? fromDynamic(dynamic raw) {
+    if (raw is! Map) return null;
+    final map = Map<String, dynamic>.from(raw);
+    final text = (map['text'] ?? map['remark'] ?? '').toString().trim();
+    if (text.isEmpty) return null;
+    final created = OnboardingModel.parseDate(map['createdAt']) ?? DateTime.now();
+    final updated = OnboardingModel.parseDate(map['updatedAt']) ?? created;
+    final id = (map['id'] ?? '').toString().trim();
+    return OnboardingRemark(
+      id: id.isEmpty ? created.microsecondsSinceEpoch.toString() : id,
+      text: text,
+      createdAt: created,
+      updatedAt: updated,
+    );
+  }
+}
+
 class OnboardingModel {
   final String id;
   final String name;
@@ -90,7 +144,9 @@ class OnboardingModel {
   final String location;
   final String phone;
   final String shopType;
+  /// Joined text of [remarkNotes], kept for search and older readers.
   final String remarks;
+  final List<OnboardingRemark> remarkNotes;
   final OnboardingStatus status;
   final DateTime? recentEnquiryDate;
   final DateTime? acceptedImplementationDate;
@@ -105,6 +161,7 @@ class OnboardingModel {
     required this.phone,
     required this.shopType,
     required this.remarks,
+    this.remarkNotes = const [],
     required this.status,
     this.recentEnquiryDate,
     this.acceptedImplementationDate,
@@ -120,6 +177,7 @@ class OnboardingModel {
       'phone': phone,
       'shopType': shopType,
       'remarks': remarks,
+      'remarkNotes': remarkNotes.map((note) => note.toMap()).toList(),
       'status': status.firestoreValue,
       'recentEnquiryDate': recentEnquiryDate == null
           ? null
@@ -134,6 +192,14 @@ class OnboardingModel {
 
   factory OnboardingModel.fromFirestore(DocumentSnapshot doc) {
     final data = (doc.data() as Map<String, dynamic>?) ?? {};
+    final createdAt = _parseDate(data['createdAt']) ?? DateTime.now();
+    final updatedAt = _parseDate(data['updatedAt']) ?? createdAt;
+    final legacyRemarks = (data['remarks'] ?? '').toString().trim();
+    final notes = _parseRemarkNotes(
+      data['remarkNotes'] ?? data['remark_notes'],
+      legacyRemarks: legacyRemarks,
+      fallbackDate: updatedAt,
+    );
     return OnboardingModel(
       id: doc.id,
       name: (data['name'] ?? '').toString().trim(),
@@ -141,7 +207,10 @@ class OnboardingModel {
       location: (data['location'] ?? '').toString().trim(),
       phone: (data['phone'] ?? '').toString().trim(),
       shopType: (data['shopType'] ?? data['shop_type'] ?? '').toString().trim(),
-      remarks: (data['remarks'] ?? '').toString().trim(),
+      remarks: notes.isEmpty
+          ? legacyRemarks
+          : notes.map((note) => note.text).join('\n'),
+      remarkNotes: notes,
       status: OnboardingStatus.fromValue(data['status']),
       recentEnquiryDate: _parseDate(
         data['recentEnquiryDate'] ?? data['recent_enquiry_date'],
@@ -150,9 +219,35 @@ class OnboardingModel {
         data['acceptedImplementationDate'] ??
             data['accepted_implementation_date'],
       ),
-      createdAt: _parseDate(data['createdAt']) ?? DateTime.now(),
-      updatedAt: _parseDate(data['updatedAt']) ?? DateTime.now(),
+      createdAt: createdAt,
+      updatedAt: updatedAt,
     );
+  }
+
+  static List<OnboardingRemark> _parseRemarkNotes(
+    dynamic raw, {
+    required String legacyRemarks,
+    required DateTime fallbackDate,
+  }) {
+    final notes = <OnboardingRemark>[];
+    if (raw is List) {
+      for (final entry in raw) {
+        final note = OnboardingRemark.fromDynamic(entry);
+        if (note != null) notes.add(note);
+      }
+    }
+    if (notes.isEmpty && legacyRemarks.isNotEmpty) {
+      notes.add(
+        OnboardingRemark(
+          id: 'legacy',
+          text: legacyRemarks,
+          createdAt: fallbackDate,
+          updatedAt: fallbackDate,
+        ),
+      );
+    }
+    notes.sort((a, b) => b.createdAt.compareTo(a.createdAt));
+    return notes;
   }
 
   OnboardingModel copyWith({
@@ -162,6 +257,7 @@ class OnboardingModel {
     String? phone,
     String? shopType,
     String? remarks,
+    List<OnboardingRemark>? remarkNotes,
     OnboardingStatus? status,
     DateTime? recentEnquiryDate,
     DateTime? acceptedImplementationDate,
@@ -176,7 +272,11 @@ class OnboardingModel {
       location: location ?? this.location,
       phone: phone ?? this.phone,
       shopType: shopType ?? this.shopType,
-      remarks: remarks ?? this.remarks,
+      remarks: remarks ??
+          (remarkNotes == null
+              ? this.remarks
+              : remarkNotes.map((note) => note.text).join('\n')),
+      remarkNotes: remarkNotes ?? this.remarkNotes,
       status: status ?? this.status,
       recentEnquiryDate: clearRecentEnquiryDate
           ? null
@@ -188,6 +288,8 @@ class OnboardingModel {
       updatedAt: updatedAt ?? this.updatedAt,
     );
   }
+
+  static DateTime? parseDate(dynamic value) => _parseDate(value);
 
   static DateTime? _parseDate(dynamic value) {
     if (value == null) return null;
