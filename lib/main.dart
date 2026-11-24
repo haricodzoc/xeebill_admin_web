@@ -3,7 +3,6 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'screens/login_screen.dart';
 import 'screens/home_screen.dart';
-import 'utils/constants.dart';
 import 'utils/units_remote_config.dart';
 
 void main() async {
@@ -22,14 +21,7 @@ void main() async {
     ),
   );
 
-  try {
-    UNITS = await loadUnitsFromRemoteConfig();
-  } catch (e, st) {
-    debugPrint('Units: using defaults (remote config failed): $e');
-    debugPrint('$st');
-  }
-
-  sortUnitsAlphabetically();
+  await ensureUnitsLoaded();
 
   runApp(const MyApp());
 }

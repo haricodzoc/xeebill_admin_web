@@ -85,7 +85,28 @@ List<String> PROFILE_CODES = ['MP'];
 
 String LABEL_SIZE = '38mm * 25mm';
 
+const List<String> LABEL_SIZE_OPTIONS = [
+  '38mm * 25mm',
+  '50mm * 25mm',
+  '50mm * 38mm',
+  '75mm * 50mm',
+  '70mm * 15mm',
+];
+
 String RECEIPT_SIZE = '2 inch';
+
+String LABEL_PRINTER_NAME = 'Peri Peri';
+
+const List<String> LABEL_PRINTER_NAME_OPTIONS = [
+  'Peri Peri',
+  'Seznik',
+  'TSC',
+  'Other',
+];
+
+String LABEL_GAP = '2mm';
+
+const List<String> LABEL_GAP_OPTIONS = ['1mm', '2mm', '3mm'];
 
 /// TSC thermal label printer resolution for TSPL (203 or 300).
 int LABEL_PRINTER_DPI = 203;
@@ -144,6 +165,20 @@ bool SCANNED_ITEM_CONFIRMATION = true;
 bool FLASH_ON_SCAN = false;
 
 bool ADDITIONAL_QUANTITY_OPTION_ENABLED = false;
+
+bool ENABLE_SERVICES = false;
+bool SCAN_SERVICE_ORDERS = false;
+bool SCAN_BILLS = false;
+bool PRINT_JOB_NAME = false;
+bool TABLE_STYLE_BILLING_ENABLED = false;
+bool TABLE_STYLE_SERVICE_ITEMS_ENABLED = false;
+bool ENABLE_ITEM_MRP = false;
+bool ENABLE_ITEM_DISCOUNT = false;
+bool EDIT_PRICE_WHILE_BILLING = false;
+
+const String kAttributeNamePositionBefore = 'before';
+const String kAttributeNamePositionAfter = 'after';
+String ATTRIBUTE_NAME_POSITION = kAttributeNamePositionBefore;
 
 bool TAX_TOGGLE = false;
 
@@ -214,9 +249,28 @@ String OPENAI_API_KEY = "";
 List<Map<String, dynamic>> UNITS = [
   {"name": "Number", "abbreviation": "nos", "uom_type": "count"},
   {"name": "Piece", "abbreviation": "pcs", "uom_type": "count"},
-  {"name": "Meter", "abbreviation": "m", "uom_type": "length"},
-  {"name": "Litre", "abbreviation": "L", "uom_type": "volume"},
-  {"name": "Kg", "abbreviation": "kg", "uom_type": "weight"},
+  {
+    "name": "Meter",
+    "abbreviation": "m",
+    "uom_type": "length",
+    "below_one": {"name": "Centimeter", "abbreviation": "cm", "multiplier": 100},
+  },
+  {
+    "name": "Litre",
+    "abbreviation": "L",
+    "uom_type": "volume",
+    "below_one": {
+      "name": "Millilitre",
+      "abbreviation": "ml",
+      "multiplier": 1000,
+    },
+  },
+  {
+    "name": "Kg",
+    "abbreviation": "kg",
+    "uom_type": "weight",
+    "below_one": {"name": "Gram", "abbreviation": "gm", "multiplier": 1000},
+  },
   {"name": "Pack", "abbreviation": "pk", "uom_type": "count"},
   {"name": "Box", "abbreviation": "bx", "uom_type": "count"},
   {"name": "Dozen", "abbreviation": "dz", "uom_type": "count"},
@@ -241,7 +295,6 @@ List<Map<String, dynamic>> UNITS = [
   {"name": "Spoon", "abbreviation": "spoon", "uom_type": "count"},
   {"name": "Fork", "abbreviation": "fork", "uom_type": "count"},
   {"name": "Knife", "abbreviation": "knife", "uom_type": "count"},
-  {"name": "Spatula", "abbreviation": "spatula", "uom_type": "count"},
   {"name": "Spatula", "abbreviation": "spatula", "uom_type": "count"},
 ];
 
@@ -292,3 +345,6 @@ enum AttributeFieldType {
 
 const List<String> RECEIPT_SIZE_OPTIONS = ['2 inch', '3 inch', '4 inch'];
 const String kDefaultReceiptSize = '2 inch';
+const String kDefaultLabelSize = '38mm * 25mm';
+const String kDefaultLabelPrinterName = 'Peri Peri';
+const String kDefaultLabelGap = '2mm';

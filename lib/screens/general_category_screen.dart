@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:xeebill_web/models/general_category_model.dart';
 import 'package:xeebill_web/models/subcategory_model.dart';
 import 'package:xeebill_web/screens/add_subcategory_screen.dart';
@@ -11,6 +12,7 @@ import 'package:xeebill_web/screens/rate_tax_definition_screen.dart';
 import 'package:xeebill_web/utils/app_colors.dart';
 import 'package:xeebill_web/utils/constants.dart';
 import 'package:xeebill_web/utils/functions.dart';
+import 'package:xeebill_web/utils/units_remote_config.dart';
 
 class GeneralCategoryScreen extends StatefulWidget {
   const GeneralCategoryScreen({super.key});
@@ -89,6 +91,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
   @override
   void initState() {
     super.initState();
+    ensureUnitsLoaded();
     _loadGeneralCategories();
   }
 
@@ -256,9 +259,70 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     return _categoryListScrollController.offset;
   }
 
+  /// Highest numeric suffix among codes like `000030-01`, plus pad width used.
+  ({int maxSuffix, int padWidth}) _subcategorySuffixStats(
+    GeneralCategory category,
+  ) {
+    final categoryCode = category.code.trim();
+    final prefix = '$categoryCode-';
+    var maxSuffix = 0;
+    var padWidth = 2;
+
+    for (final sub in category.subcategories) {
+      final code = sub.code.trim();
+      if (!code.startsWith(prefix)) continue;
+      final suffix = code.substring(prefix.length);
+      if (suffix.isEmpty || !RegExp(r'^\d+$').hasMatch(suffix)) continue;
+      final value = int.tryParse(suffix) ?? 0;
+      if (value > maxSuffix) maxSuffix = value;
+      if (suffix.length > padWidth) padWidth = suffix.length;
+    }
+
+    return (maxSuffix: maxSuffix, padWidth: padWidth);
+  }
+
+  String _formatSubcategoryCode({
+    required String categoryCode,
+    required int suffix,
+    required int padWidth,
+  }) {
+    final width = suffix.toString().length > padWidth
+        ? suffix.toString().length
+        : padWidth;
+    return '$categoryCode-${suffix.toString().padLeft(width, '0')}';
+  }
+
+  String _nextAvailableSubcategoryCode(GeneralCategory category) {
+    final categoryCode = category.code.trim();
+    final stats = _subcategorySuffixStats(category);
+    return _formatSubcategoryCode(
+      categoryCode: categoryCode,
+      suffix: stats.maxSuffix + 1,
+      padWidth: stats.padWidth,
+    );
+  }
+
+  List<String> _allocateSubcategoryCodes({
+    required GeneralCategory category,
+    required int count,
+  }) {
+    if (count <= 0) return const [];
+    final categoryCode = category.code.trim();
+    final stats = _subcategorySuffixStats(category);
+    return List.generate(
+      count,
+      (i) => _formatSubcategoryCode(
+        categoryCode: categoryCode,
+        suffix: stats.maxSuffix + 1 + i,
+        padWidth: stats.padWidth,
+      ),
+    );
+  }
+
   List<Map<String, dynamic>> _parseGeneralSubCategoryMapsFromJson(
     String raw, {
     required String selectedCategoryCode,
+    required List<String> assignedCodes,
   }) {
     final trimmed = raw.trim();
     if (trimmed.isEmpty) {
@@ -269,7 +333,6 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     if (categoryCode.isEmpty) {
       throw const FormatException('Selected category code is empty');
     }
-    final requiredPrefix = '$categoryCode-';
 
     final decoded = jsonDecode(trimmed);
     if (decoded is! List) {
@@ -277,9 +340,16 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
         'JSON must be an array of subcategory objects',
       );
     }
+    if (decoded.isEmpty) {
+      throw const FormatException('JSON array cannot be empty');
+    }
+    if (assignedCodes.length != decoded.length) {
+      throw FormatException(
+        'Expected ${decoded.length} assigned codes, got ${assignedCodes.length}',
+      );
+    }
 
     final parsed = <Map<String, dynamic>>[];
-    final seenCodes = <String>{};
 
     for (var i = 0; i < decoded.length; i++) {
       final item = decoded[i];
@@ -288,31 +358,13 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
       }
 
       final map = Map<String, dynamic>.from(item);
-      final code = (map['code'] ?? '').toString().trim();
       final name = (map['name'] ?? '').toString().trim();
 
-      if (code.isEmpty || name.isEmpty) {
+      if (name.isEmpty) {
         throw FormatException(
-          'Item at index $i must include non-empty "code" and "name"',
+          'Item at index $i must include a non-empty "name"',
         );
       }
-      if (!code.startsWith(requiredPrefix)) {
-        throw FormatException(
-          'Item at index $i: code "$code" must start with "$requiredPrefix" '
-          '(selected category code is $categoryCode). '
-          'Example: ${requiredPrefix}01',
-        );
-      }
-      if (code == requiredPrefix || code == categoryCode) {
-        throw FormatException(
-          'Item at index $i: code "$code" must include a suffix after '
-          '"$requiredPrefix" (e.g. ${requiredPrefix}01)',
-        );
-      }
-      if (seenCodes.contains(code)) {
-        throw FormatException('Duplicate subcategory code "$code" in JSON');
-      }
-      seenCodes.add(code);
 
       // Store attributes as a JSON string.
       String attributesJson = '';
@@ -341,7 +393,7 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
           : double.tryParse(gstRaw?.toString() ?? '');
 
       parsed.add({
-        'code': code,
+        'code': assignedCodes[i],
         'name': name,
         'attributes': attributesJson,
         'attribute_types': attributeTypes,
@@ -357,6 +409,57 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     return parsed;
   }
 
+  dynamic _decodeJsonField(String raw) {
+    final trimmed = raw.trim();
+    if (trimmed.isEmpty) return '';
+    try {
+      return jsonDecode(trimmed);
+    } catch (_) {
+      return trimmed;
+    }
+  }
+
+  String _buildCategorySubcategoriesJson(GeneralCategory category) {
+    final list = category.subcategories.map((sub) {
+      return <String, dynamic>{
+        'code': sub.code,
+        'name': sub.name,
+        'attributes': _decodeJsonField(sub.attributes),
+        'attribute_types': _decodeJsonField(sub.attributeTypes),
+        'hsn_code': sub.hsnCode ?? '',
+        'unit': (sub.unit ?? 'Piece').trim().isEmpty
+            ? 'Piece'
+            : (sub.unit ?? 'Piece').trim(),
+        'description': sub.description ?? '',
+        'gst_rate': sub.gstRate,
+      };
+    }).toList();
+    return const JsonEncoder.withIndent('  ').convert(list);
+  }
+
+  Future<void> _copyCategoryJson(int index) async {
+    final category = _filteredCategories[index];
+    final originalCategory = _categories.firstWhere(
+      (c) => c.code == category.code,
+      orElse: () => category,
+    );
+    final json = _buildCategorySubcategoriesJson(originalCategory);
+    await Clipboard.setData(ClipboardData(text: json));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          originalCategory.subcategories.isEmpty
+              ? 'Copied empty JSON array for ${originalCategory.categoryName}'
+              : 'Copied ${originalCategory.subcategories.length} subcategor'
+                  '${originalCategory.subcategories.length == 1 ? 'y' : 'ies'} '
+                  'JSON for ${originalCategory.categoryName}',
+        ),
+        backgroundColor: AppColors.primaryGreen,
+      ),
+    );
+  }
+
   Future<void> _showImportSubcategoriesJsonDialog(int index) async {
     final category = _filteredCategories[index];
     final originalCategory = _categories.firstWhere(
@@ -365,14 +468,13 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     );
     final categoryCode = category.code.trim();
     final subcategoryCount = originalCategory.subcategories.length;
-    final requiredPrefix = '$categoryCode-';
+    final nextCode = _nextAvailableSubcategoryCode(originalCategory);
     final jsonController = TextEditingController();
     var isSubmitting = false;
     String? errorText;
 
     final exampleJson = '''[
   {
-    "code": "${requiredPrefix}01",
     "name": "Example Item",
     "attributes": "{\\"Type\\":{\\"Fresh\\":false}}",
     "attribute_types": "",
@@ -443,8 +545,27 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                             ),
                             const SizedBox(height: 8),
                             Text(
-                              'Hint: every subcategory "code" in the JSON must start with '
-                              '"$requiredPrefix" (e.g. ${requiredPrefix}01, ${requiredPrefix}04).',
+                              'Next available code',
+                              style: TextStyle(
+                                fontSize: 12,
+                                color: Colors.grey[700],
+                              ),
+                            ),
+                            const SizedBox(height: 4),
+                            Text(
+                              nextCode,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w700,
+                                fontFamily: 'monospace',
+                                color: AppColors.primaryGreen,
+                              ),
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              'Codes are assigned automatically on import '
+                              '(e.g. $nextCode, then the next numbers). '
+                              'Any "code" values in the JSON are ignored.',
                               style: TextStyle(
                                 fontSize: 13,
                                 height: 1.35,
@@ -456,8 +577,8 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                       ),
                       const SizedBox(height: 12),
                       Text(
-                        'Paste a JSON array. Each object is saved as a record in '
-                        'general_sub_categories (document id = code).',
+                        'Paste a JSON array. Each object needs a "name"; codes are '
+                        'auto-assigned and saved in general_sub_categories.',
                         style: TextStyle(fontSize: 13, color: Colors.grey[700]),
                       ),
                       const SizedBox(height: 12),
@@ -498,79 +619,34 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                           });
 
                           try {
+                            final trimmed = jsonController.text.trim();
+                            if (trimmed.isEmpty) {
+                              throw const FormatException('JSON cannot be empty');
+                            }
+                            final decoded = jsonDecode(trimmed);
+                            if (decoded is! List) {
+                              throw const FormatException(
+                                'JSON must be an array of subcategory objects',
+                              );
+                            }
+                            if (decoded.isEmpty) {
+                              throw const FormatException(
+                                'JSON array cannot be empty',
+                              );
+                            }
+
+                            final assignedCodes = _allocateSubcategoryCodes(
+                              category: originalCategory,
+                              count: decoded.length,
+                            );
                             final parsed = _parseGeneralSubCategoryMapsFromJson(
                               jsonController.text,
                               selectedCategoryCode: categoryCode,
+                              assignedCodes: assignedCodes,
                             );
-
-                            // Check which codes already exist.
-                            final existingDocs =
-                                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
-                            const chunkSize = 10;
-                            for (var i = 0; i < parsed.length; i += chunkSize) {
-                              final chunk = parsed
-                                  .skip(i)
-                                  .take(chunkSize)
-                                  .map((e) => e['code'] as String)
-                                  .toList();
-                              final snap = await FirebaseFirestore.instance
-                                  .collection('general_sub_categories')
-                                  .where(FieldPath.documentId, whereIn: chunk)
-                                  .get();
-                              existingDocs.addAll(snap.docs);
-                            }
-
-                            final existingById = {
-                              for (final doc in existingDocs) doc.id: doc,
-                            };
-                            final existingCodes = existingById.keys.toList()
-                              ..sort();
-
-                            if (existingCodes.isNotEmpty) {
-                              if (!dialogContext.mounted) return;
-                              final preview = existingCodes.take(8).join(', ');
-                              final more = existingCodes.length > 8
-                                  ? ' and ${existingCodes.length - 8} more'
-                                  : '';
-                              final replace = await showDialog<bool>(
-                                context: dialogContext,
-                                builder: (confirmCtx) => AlertDialog(
-                                  title: const Text('Replace existing records?'),
-                                  content: Text(
-                                    '${existingCodes.length} subcategor'
-                                    '${existingCodes.length == 1 ? 'y' : 'ies'} '
-                                    'already exist in general_sub_categories:\n\n'
-                                    '$preview$more\n\n'
-                                    'Replace them with the imported values?',
-                                  ),
-                                  actions: [
-                                    TextButton(
-                                      onPressed: () =>
-                                          Navigator.pop(confirmCtx, false),
-                                      child: const Text('Cancel'),
-                                    ),
-                                    ElevatedButton(
-                                      onPressed: () =>
-                                          Navigator.pop(confirmCtx, true),
-                                      style: ElevatedButton.styleFrom(
-                                        backgroundColor: Colors.orange,
-                                        foregroundColor: Colors.white,
-                                      ),
-                                      child: const Text('Replace'),
-                                    ),
-                                  ],
-                                ),
-                              );
-
-                              if (replace != true) {
-                                setDialogState(() => isSubmitting = false);
-                                return;
-                              }
-                            }
 
                             final now = DateTime.now();
                             var createdCount = 0;
-                            var replacedCount = 0;
 
                             // Firestore batch limit is 500.
                             const batchLimit = 400;
@@ -590,22 +666,6 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                                   .collection('general_sub_categories')
                                   .doc(code);
 
-                              final existing = existingById[code];
-                              DateTime createdAt = now;
-                              if (existing != null) {
-                                final data = existing.data();
-                                final rawCreated = data['created_at'];
-                                if (rawCreated is Timestamp) {
-                                  createdAt = rawCreated.toDate();
-                                } else if (rawCreated is String) {
-                                  createdAt =
-                                      DateTime.tryParse(rawCreated) ?? now;
-                                }
-                                replacedCount++;
-                              } else {
-                                createdCount++;
-                              }
-
                               batch.set(ref, {
                                 'code': code,
                                 'gen_cat_code': category.code,
@@ -617,9 +677,10 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                                 'description': item['description'],
                                 'gst_rate': item['gst_rate'],
                                 'remarks': <String, dynamic>{},
-                                'created_at': createdAt.toIso8601String(),
+                                'created_at': now.toIso8601String(),
                                 'updated_at': now.toIso8601String(),
                               });
+                              createdCount++;
                               opsInBatch++;
 
                               if (opsInBatch >= batchLimit) {
@@ -632,16 +693,22 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                             Navigator.of(dialogContext).pop();
 
                             if (!mounted) return;
+                            final firstCode = assignedCodes.first;
+                            final lastCode = assignedCodes.last;
+                            final rangeLabel = assignedCodes.length == 1
+                                ? firstCode
+                                : '$firstCode … $lastCode';
                             ScaffoldMessenger.of(context).showSnackBar(
                               SnackBar(
                                 content: Text(
-                                  'Imported ${parsed.length} subcategor'
-                                  '${parsed.length == 1 ? 'y' : 'ies'} '
-                                  '($createdCount new, $replacedCount replaced)',
+                                  'Imported $createdCount subcategor'
+                                  '${createdCount == 1 ? 'y' : 'ies'} '
+                                  '($rangeLabel)',
                                 ),
                                 backgroundColor: Colors.green,
                               ),
                             );
+                            await _loadGeneralCategories();
                           } on FormatException catch (e) {
                             setDialogState(() {
                               errorText = e.message;
@@ -966,142 +1033,177 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
     }
   }
 
+  List<String> get _unitDisplayNames {
+    return UNITS
+        .map((unit) => (unit['name'] as String?)?.trim() ?? '')
+        .where((n) => n.isNotEmpty)
+        .toList();
+  }
+
+  String? _defaultUnitName() {
+    final names = _unitDisplayNames;
+    if (names.contains('Piece')) return 'Piece';
+    if (names.contains('Number')) return 'Number';
+    if (names.isNotEmpty) return names.first;
+    return null;
+  }
+
   Future<void> _openAddSubcategoryDialog(GeneralCategory category) async {
-    // Create a simple dialog to add a new subcategory
-    // You can replace this with a more sophisticated form
+    await ensureUnitsLoaded();
+    if (!mounted) return;
     final nameController = TextEditingController();
     final codeController = TextEditingController();
     final hsnCodeController = TextEditingController();
-    final unitController = TextEditingController(text: 'Number');
     final gstRateController = TextEditingController();
+    String? selectedUnit = _defaultUnitName();
 
     await showDialog(
       context: context,
       builder: (BuildContext context) {
-        return AlertDialog(
-          title: Text('Add Subcategory to ${category.categoryName}'),
-          content: SingleChildScrollView(
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                TextField(
-                  controller: nameController,
-                  decoration: const InputDecoration(
-                    labelText: 'Subcategory Name *',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: codeController,
-                  decoration: const InputDecoration(
-                    labelText: 'Subcategory Code *',
-                    hintText: 'e.g., CAT-001',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: hsnCodeController,
-                  decoration: const InputDecoration(
-                    labelText: 'HSN Code',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: unitController,
-                  decoration: const InputDecoration(
-                    labelText: 'Unit',
-                    border: OutlineInputBorder(),
-                  ),
-                ),
-                const SizedBox(height: 16),
-                TextField(
-                  controller: gstRateController,
-                  decoration: const InputDecoration(
-                    labelText: 'GST Rate (%)',
-                    border: OutlineInputBorder(),
-                  ),
-                  keyboardType: TextInputType.number,
-                ),
-              ],
-            ),
-          ),
-          actions: [
-            TextButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Cancel'),
-            ),
-            ElevatedButton(
-              onPressed: () async {
-                if (nameController.text.isEmpty ||
-                    codeController.text.isEmpty) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Name and Code are required')),
-                  );
-                  return;
-                }
-
-                final newCode = codeController.text.trim();
-                if (category.subcategories.any(
-                  (s) => s.code.trim() == newCode,
-                )) {
-                  final existing = category.subcategories.firstWhere(
-                    (s) => s.code.trim() == newCode,
-                  );
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Code "$newCode" is already used by "${existing.name}". '
-                        'Use a unique code so an existing subcategory is not replaced.',
+        return StatefulBuilder(
+          builder: (context, setDialogState) {
+            return AlertDialog(
+              title: Text('Add Subcategory to ${category.categoryName}'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    TextField(
+                      controller: nameController,
+                      decoration: const InputDecoration(
+                        labelText: 'Subcategory Name *',
+                        border: OutlineInputBorder(),
                       ),
                     ),
-                  );
-                  return;
-                }
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: codeController,
+                      decoration: const InputDecoration(
+                        labelText: 'Subcategory Code *',
+                        hintText: 'e.g., CAT-001',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: hsnCodeController,
+                      decoration: const InputDecoration(
+                        labelText: 'HSN Code',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    DropdownButtonFormField<String>(
+                      value: selectedUnit != null &&
+                              _unitDisplayNames.contains(selectedUnit)
+                          ? selectedUnit
+                          : null,
+                      items: [
+                        const DropdownMenuItem(
+                          value: null,
+                          child: Text('Select unit'),
+                        ),
+                        ..._unitDisplayNames.map(
+                          (name) => DropdownMenuItem(
+                            value: name,
+                            child: Text(name),
+                          ),
+                        ),
+                      ],
+                      onChanged: (value) {
+                        setDialogState(() => selectedUnit = value);
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Unit',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      controller: gstRateController,
+                      decoration: const InputDecoration(
+                        labelText: 'GST Rate (%)',
+                        border: OutlineInputBorder(),
+                      ),
+                      keyboardType: TextInputType.number,
+                    ),
+                  ],
+                ),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.of(context).pop(),
+                  child: const Text('Cancel'),
+                ),
+                ElevatedButton(
+                  onPressed: () async {
+                    if (nameController.text.isEmpty ||
+                        codeController.text.isEmpty) {
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Name and Code are required'),
+                        ),
+                      );
+                      return;
+                    }
 
-                // Create new subcategory in general_sub_categories
-                SubCategory newSubcategory = SubCategory(
-                  name: nameController.text,
-                  code: newCode,
-                  attributes: '',
-                  attributeTypes: '',
-                  hsnCode: hsnCodeController.text.isEmpty
-                      ? null
-                      : hsnCodeController.text,
-                  unit: unitController.text.isEmpty
-                      ? null
-                      : unitController.text,
-                  gstRate: gstRateController.text.isEmpty
-                      ? null
-                      : double.tryParse(gstRateController.text),
-                );
+                    final newCode = codeController.text.trim();
+                    if (category.subcategories.any(
+                      (s) => s.code.trim() == newCode,
+                    )) {
+                      final existing = category.subcategories.firstWhere(
+                        (s) => s.code.trim() == newCode,
+                      );
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(
+                          content: Text(
+                            'Code "$newCode" is already used by "${existing.name}". '
+                            'Use a unique code so an existing subcategory is not replaced.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
 
-                final saved =
-                    await _upsertSubcategoryInCollection(
+                    final newSubcategory = SubCategory(
+                      name: nameController.text,
+                      code: newCode,
+                      attributes: '',
+                      attributeTypes: '',
+                      hsnCode: hsnCodeController.text.isEmpty
+                          ? null
+                          : hsnCodeController.text,
+                      unit: selectedUnit,
+                      gstRate: gstRateController.text.isEmpty
+                          ? null
+                          : double.tryParse(gstRateController.text),
+                    );
+
+                    final saved = await _upsertSubcategoryInCollection(
                       categoryCode: category.code,
                       subcategory: newSubcategory,
                     );
-                if (!saved) return;
+                    if (!saved) return;
 
-                if (mounted) {
-                  Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(
-                      content: Text('Subcategory added successfully'),
-                    ),
-                  );
-                  _loadGeneralCategories(); // Reload to refresh UI
-                }
-              },
-              style: ElevatedButton.styleFrom(
-                backgroundColor: AppColors.primaryGreen,
-                foregroundColor: Colors.white,
-              ),
-              child: const Text('Add'),
-            ),
-          ],
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(
+                          content: Text('Subcategory added successfully'),
+                        ),
+                      );
+                      _loadGeneralCategories();
+                    }
+                  },
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primaryGreen,
+                    foregroundColor: Colors.white,
+                  ),
+                  child: const Text('Add'),
+                ),
+              ],
+            );
+          },
         );
       },
     );
@@ -1727,6 +1829,17 @@ class _GeneralCategoryScreenState extends State<GeneralCategoryScreen> {
                     constraints: const BoxConstraints(),
                     tooltip: 'Add Subcategory',
                   ),
+                IconButton(
+                  icon: Icon(
+                    Icons.copy_all_outlined,
+                    color: AppColors.primaryGreen,
+                    size: 20,
+                  ),
+                  onPressed: () => _copyCategoryJson(index),
+                  padding: EdgeInsets.zero,
+                  constraints: const BoxConstraints(),
+                  tooltip: 'Copy category JSON',
+                ),
                 if (ADD_GEN_CAT)
                   IconButton(
                     icon: Icon(

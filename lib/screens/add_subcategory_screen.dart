@@ -6,6 +6,7 @@ import 'package:flutter/services.dart';
 import 'package:xeebill_web/models/subcategory_model.dart';
 import 'package:xeebill_web/utils/app_colors.dart';
 import 'package:xeebill_web/utils/constants.dart';
+import 'package:xeebill_web/utils/units_remote_config.dart';
 
 class AddSubcategoryScreen extends StatefulWidget {
   final String categoryCode;
@@ -66,6 +67,20 @@ class _AddSubcategoryScreenState extends State<AddSubcategoryScreen> {
       _codeController.text = _generateUniqueCode();
       selectedUnit = _defaultUnitForNew();
     }
+    ensureUnitsLoaded().then((_) {
+      if (!mounted) return;
+      setState(() {
+        if (widget.isUpdate && widget.selectedSubcategory != null) {
+          final u = widget.selectedSubcategory!.unit?.trim();
+          if (u != null && u.isNotEmpty && _unitDisplayNames.contains(u)) {
+            selectedUnit = u;
+          }
+        } else if (selectedUnit == null ||
+            !_unitDisplayNames.contains(selectedUnit)) {
+          selectedUnit = _defaultUnitForNew();
+        }
+      });
+    });
   }
 
   void _loadDefaultValues(SubCategory subCategory) {

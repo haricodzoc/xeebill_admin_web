@@ -7,6 +7,7 @@ import '../models/service_order_model.dart';
 import '../models/service_template_model.dart';
 import '../models/sub_profile_model.dart';
 import '../utils/item_list_filters.dart';
+import '../utils/service_additional_info.dart';
 
 class _ServiceLocationOption {
   final String id;
@@ -734,8 +735,34 @@ class _ServicesScreenState extends State<ServicesScreen>
     customerSearchController.dispose();
   }
 
+  ServiceTemplateModel? _templateForOrder(ServiceAdditionalInfo info) {
+    final templateId = info.templateId?.trim() ?? '';
+    if (templateId.isEmpty) return null;
+    for (final template in _templates) {
+      if (template.id == templateId) return template;
+    }
+    return null;
+  }
+
+  List<ServiceFieldModel> _fieldsForOrder(ServiceAdditionalInfo info) {
+    return ServiceAdditionalInfo.resolveFieldDefinitions(
+      liveTemplate: _templateForOrder(info),
+      info: info,
+    );
+  }
+
   void _showOrderDetails(ServiceOrderModel order) {
     final items = order.items ?? [];
+    final info = ServiceAdditionalInfo.fromRaw(order.additionalInfo);
+    final liveTemplate = _templateForOrder(info);
+    final templateFields = _fieldsForOrder(info);
+    final templateName = (info.templateName?.trim().isNotEmpty == true)
+        ? info.templateName!.trim()
+        : (liveTemplate?.name.trim().isNotEmpty == true
+            ? liveTemplate!.name.trim()
+            : '');
+    final linkedInvoice = info.linkedInvoiceNumber?.trim() ?? '';
+
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -815,10 +842,93 @@ class _ServicesScreenState extends State<ServicesScreen>
                             _detailRow('Phone', order.customerPhone),
                             _detailRow('Payment', order.paymentMode),
                             _detailRow('Profile', order.profileCode),
+                            if (templateName.isNotEmpty)
+                              _detailRow('Template', templateName),
+                            if (linkedInvoice.isNotEmpty)
+                              _detailRow('Linked invoice', linkedInvoice),
                           ],
                         ),
                       ),
                     ),
+                    if (templateFields.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Template fields (${templateFields.length})',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              for (var i = 0; i < templateFields.length; i++) ...[
+                                if (i > 0)
+                                  const Divider(height: 16, color: Color(0xFFE8ECF0)),
+                                Builder(
+                                  builder: (_) {
+                                    final field = templateFields[i];
+                                    final value = ServiceAdditionalInfo
+                                            .displayValue(
+                                      info.customFields[field.id],
+                                    )
+                                        .trim();
+                                    return _detailRow(
+                                      field.name.isEmpty ? 'Field' : field.name,
+                                      value.isEmpty ? '—' : value,
+                                    );
+                                  },
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ] else if (info.customFields.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      Text(
+                        'Template fields (${info.customFields.length})',
+                        style: const TextStyle(
+                          fontSize: 16,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      Card(
+                        child: Padding(
+                          padding: const EdgeInsets.all(16),
+                          child: Column(
+                            children: [
+                              for (var i = 0;
+                                  i < info.customFields.entries.length;
+                                  i++) ...[
+                                if (i > 0)
+                                  const Divider(
+                                    height: 16,
+                                    color: Color(0xFFE8ECF0),
+                                  ),
+                                Builder(
+                                  builder: (_) {
+                                    final entry =
+                                        info.customFields.entries.elementAt(i);
+                                    final value = ServiceAdditionalInfo
+                                            .displayValue(entry.value)
+                                        .trim();
+                                    return _detailRow(
+                                      entry.key,
+                                      value.isEmpty ? '—' : value,
+                                    );
+                                  },
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                    ],
                     const SizedBox(height: 16),
                     Text(
                       'Items (${items.length})',
@@ -837,7 +947,8 @@ class _ServicesScreenState extends State<ServicesScreen>
                           child: ListTile(
                             title: Text(item.name),
                             subtitle: Text(
-                              '₹${item.price.toStringAsFixed(2)} × ${item.quantity.toStringAsFixed(2)} ${item.unit}',
+                              '₹${item.price.toStringAsFixed(2)} × ${item.quantity.toStringAsFixed(2)} ${item.unit}'
+                              '${item.taxPerc > 0 ? ' · GST ${item.taxPerc.toStringAsFixed(2)}%' : ''}',
                             ),
                             trailing: Text(
                               '₹${item.totalAfterTax.toStringAsFixed(2)}',
@@ -876,37 +987,307 @@ class _ServicesScreenState extends State<ServicesScreen>
     );
   }
 
-  void _showTemplateDetails(ServiceTemplateModel template) {
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: Text(template.name.isEmpty ? 'Service Template' : template.name),
-        content: SizedBox(
-          width: double.maxFinite,
-          child: template.fields.isEmpty
-              ? const Text('No fields defined')
-              : ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: template.fields.length,
-                  separatorBuilder: (_, __) => const Divider(height: 1),
-                  itemBuilder: (_, i) {
-                    final f = template.fields[i];
-                    return ListTile(
-                      dense: true,
-                      title: Text(f.name),
-                      subtitle: Text(
-                        '${f.type}${f.mandatory ? ' • mandatory' : ''}${f.options.isNotEmpty ? ' • ${f.options.length} options' : ''}',
-                      ),
-                    );
-                  },
-                ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: const Text('Close'),
+  String _fieldTypeLabel(String type) => ServiceFieldType.label(type);
+
+  IconData _iconForFieldType(String type) {
+    switch (type) {
+      case ServiceFieldType.textfield:
+        return Icons.text_fields_rounded;
+      case ServiceFieldType.multiSelect:
+        return Icons.checklist_rounded;
+      case ServiceFieldType.singleSelect:
+        return Icons.radio_button_checked_rounded;
+      case ServiceFieldType.textArea:
+        return Icons.notes_rounded;
+      case ServiceFieldType.date:
+        return Icons.calendar_today_rounded;
+      case ServiceFieldType.pattern:
+        return Icons.gesture_rounded;
+      default:
+        return Icons.label_outline_rounded;
+    }
+  }
+
+  String _fieldSubtitle(ServiceFieldModel field) {
+    final parts = <String>[_fieldTypeLabel(field.type)];
+    if (field.mandatory) parts.add('Required');
+    if (field.showInOrderSummary) parts.add('On order summary');
+    if (field.type == ServiceFieldType.pattern) {
+      parts.add('Draw on order');
+    } else if (!field.printable) {
+      parts.add('Not on receipt');
+    }
+    return parts.join(' · ');
+  }
+
+  Widget _templateSectionTitle(String title, String subtitle) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            title,
+            style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w700),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            subtitle,
+            style: TextStyle(fontSize: 12, color: Colors.grey[600]),
           ),
         ],
+      ),
+    );
+  }
+
+  void _showTemplateDetails(ServiceTemplateModel template) {
+    final fieldCount = template.fields.length;
+    final chargeCount = template.defaultCharges.length;
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => DraggableScrollableSheet(
+        initialChildSize: 0.88,
+        minChildSize: 0.5,
+        maxChildSize: 0.96,
+        builder: (ctx, scrollController) => Container(
+          decoration: const BoxDecoration(
+            color: Colors.white,
+            borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+          ),
+          child: Column(
+            children: [
+              Container(
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                width: 40,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: Colors.grey[300],
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 0, 8, 8),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            template.name.isEmpty
+                                ? 'Service template'
+                                : template.name,
+                            style: Theme.of(context).textTheme.headlineSmall,
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            '$fieldCount field${fieldCount == 1 ? '' : 's'} · '
+                            '$chargeCount default charge${chargeCount == 1 ? '' : 's'}',
+                            style: TextStyle(
+                              color: Colors.grey[600],
+                              fontSize: 13,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    IconButton(
+                      icon: const Icon(Icons.close),
+                      onPressed: () => Navigator.pop(ctx),
+                    ),
+                  ],
+                ),
+              ),
+              const Divider(height: 1),
+              Expanded(
+                child: ListView(
+                  controller: scrollController,
+                  padding: const EdgeInsets.fromLTRB(16, 16, 16, 28),
+                  children: [
+                    Card(
+                      child: Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            _templateSectionTitle(
+                              'Service details',
+                              'Name and options used when creating service orders',
+                            ),
+                            _detailRow(
+                              'Name',
+                              template.name.isEmpty ? '—' : template.name,
+                            ),
+                            _detailRow(
+                              'Print item label',
+                              template.printServiceItemLabel ? 'Yes' : 'No',
+                            ),
+                            _detailRow(
+                              'Created',
+                              DateFormat('dd MMM yyyy, HH:mm')
+                                  .format(template.createdAt),
+                            ),
+                            _detailRow(
+                              'Updated',
+                              DateFormat('dd MMM yyyy, HH:mm')
+                                  .format(template.updatedAt),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    _templateSectionTitle(
+                      'Default charges',
+                      chargeCount == 0
+                          ? 'Optional lines added on a new service order'
+                          : '$chargeCount charge${chargeCount == 1 ? '' : 's'} applied when this template is selected',
+                    ),
+                    if (chargeCount == 0)
+                      Card(
+                        color: Colors.grey[50],
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 20,
+                            horizontal: 16,
+                          ),
+                          child: Text(
+                            'No default charges — new orders start with an empty item list',
+                            style: TextStyle(fontSize: 13, color: Colors.black54),
+                          ),
+                        ),
+                      )
+                    else
+                      ...template.defaultCharges.map((charge) {
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: ListTile(
+                            leading: CircleAvatar(
+                              backgroundColor: Colors.green.withValues(alpha: 0.12),
+                              child: const Icon(
+                                Icons.payments_outlined,
+                                color: Colors.green,
+                                size: 20,
+                              ),
+                            ),
+                            title: Text(
+                              charge.name,
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                            subtitle: Text(
+                              'Default rate  ₹${charge.rate.toStringAsFixed(2)}'
+                              '  ·  GST ${charge.taxPerc.toStringAsFixed(2)}%',
+                            ),
+                            trailing: Text(
+                              '₹${charge.rate.toStringAsFixed(2)}',
+                              style: const TextStyle(fontWeight: FontWeight.w600),
+                            ),
+                          ),
+                        );
+                      }),
+                    const SizedBox(height: 16),
+                    _templateSectionTitle(
+                      'Template fields',
+                      fieldCount == 0
+                          ? 'Custom fields for this service'
+                          : '$fieldCount custom field${fieldCount == 1 ? '' : 's'}',
+                    ),
+                    if (fieldCount == 0)
+                      Card(
+                        color: Colors.grey[50],
+                        child: const Padding(
+                          padding: EdgeInsets.symmetric(
+                            vertical: 20,
+                            horizontal: 16,
+                          ),
+                          child: Text(
+                            'No fields defined for this service',
+                            style: TextStyle(fontSize: 13, color: Colors.black54),
+                          ),
+                        ),
+                      )
+                    else
+                      ...template.fields.map((field) {
+                        return Card(
+                          margin: const EdgeInsets.only(bottom: 8),
+                          child: Padding(
+                            padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
+                            child: Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                CircleAvatar(
+                                  backgroundColor:
+                                      Theme.of(context).colorScheme.primaryContainer,
+                                  child: Icon(
+                                    _iconForFieldType(field.type),
+                                    size: 20,
+                                  ),
+                                ),
+                                const SizedBox(width: 12),
+                                Expanded(
+                                  child: Column(
+                                    crossAxisAlignment: CrossAxisAlignment.start,
+                                    children: [
+                                      Text(
+                                        field.name.isEmpty
+                                            ? 'Unnamed field'
+                                            : field.name,
+                                        style: const TextStyle(
+                                          fontSize: 15,
+                                          fontWeight: FontWeight.w600,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 2),
+                                      Text(
+                                        _fieldSubtitle(field),
+                                        style: TextStyle(
+                                          fontSize: 12,
+                                          color: Colors.grey[700],
+                                        ),
+                                      ),
+                                      if (ServiceFieldType.requiresOptions(
+                                            field.type,
+                                          ) &&
+                                          field.options.isNotEmpty) ...[
+                                        const SizedBox(height: 8),
+                                        Wrap(
+                                          spacing: 6,
+                                          runSpacing: 6,
+                                          children: field.options
+                                              .map(
+                                                (option) => Chip(
+                                                  label: Text(
+                                                    option,
+                                                    style: const TextStyle(
+                                                      fontSize: 12,
+                                                    ),
+                                                  ),
+                                                  visualDensity:
+                                                      VisualDensity.compact,
+                                                  materialTapTargetSize:
+                                                      MaterialTapTargetSize
+                                                          .shrinkWrap,
+                                                ),
+                                              )
+                                              .toList(),
+                                        ),
+                                      ],
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ),
+                        );
+                      }),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -1247,7 +1628,9 @@ class _ServicesScreenState extends State<ServicesScreen>
                               ),
                               title: Text(t.name.isEmpty ? 'Unnamed template' : t.name),
                               subtitle: Text(
-                                '${t.fields.length} field${t.fields.length == 1 ? '' : 's'} • Updated ${DateFormat('dd MMM yyyy').format(t.updatedAt)}',
+                                '${t.fields.length} field${t.fields.length == 1 ? '' : 's'}'
+                                ' · ${t.defaultCharges.length} default charge${t.defaultCharges.length == 1 ? '' : 's'}'
+                                ' • Updated ${DateFormat('dd MMM yyyy').format(t.updatedAt)}',
                               ),
                               trailing: const Icon(Icons.chevron_right),
                               onTap: () => _showTemplateDetails(t),

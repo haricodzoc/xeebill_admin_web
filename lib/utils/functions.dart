@@ -56,6 +56,33 @@ String receiptSizeFromRemote(dynamic raw) {
   return kDefaultReceiptSize;
 }
 
+String labelSizeFromRemote(dynamic raw) {
+  final value = raw?.toString().trim() ?? '';
+  if (LABEL_SIZE_OPTIONS.contains(value)) return value;
+  return kDefaultLabelSize;
+}
+
+String labelPrinterNameFromRemote(dynamic raw) {
+  final value = raw?.toString().trim() ?? '';
+  for (final option in LABEL_PRINTER_NAME_OPTIONS) {
+    if (option.toLowerCase() == value.toLowerCase()) return option;
+  }
+  return kDefaultLabelPrinterName;
+}
+
+String labelGapFromRemote(dynamic raw) {
+  if (raw == null) return kDefaultLabelGap;
+  if (raw is num) {
+    final n = raw.round().clamp(1, 3);
+    return '${n}mm';
+  }
+  final text = raw.toString().trim().toLowerCase().replaceAll(' ', '');
+  if (LABEL_GAP_OPTIONS.contains(text)) return text;
+  final n = int.tryParse(text.replaceAll(RegExp(r'[^0-9]'), ''));
+  if (n != null && n >= 1 && n <= 3) return '${n}mm';
+  return kDefaultLabelGap;
+}
+
 Map<String, String> normalizedMaskedJsonFromValue(dynamic raw) {
   final out = <String, String>{};
   for (int i = 0; i < 10; i++) {
@@ -107,6 +134,21 @@ String jewelTagPrintDirectionFromRemote(dynamic raw) {
   final value = raw?.toString().trim().toLowerCase() ?? '';
   if (JEWEL_TAG_PRINT_DIRECTION_OPTIONS.contains(value)) return value;
   return 'left';
+}
+
+String attributeNamePositionFromRemote(dynamic raw) {
+  final value = raw?.toString().trim().toLowerCase() ?? '';
+  if (value == kAttributeNamePositionBefore ||
+      value == 'before_category' ||
+      value == 'before') {
+    return kAttributeNamePositionBefore;
+  }
+  if (value == kAttributeNamePositionAfter ||
+      value == 'after_category' ||
+      value == 'after') {
+    return kAttributeNamePositionAfter;
+  }
+  return kAttributeNamePositionBefore;
 }
 
 void normalizeLabelTemplateGlobals() {

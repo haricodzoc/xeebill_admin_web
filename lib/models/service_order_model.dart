@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 import 'service_order_item_model.dart';
@@ -136,6 +138,19 @@ class ServiceOrderModel {
     return items;
   }
 
+  static String _normalizeAdditionalInfo(dynamic raw) {
+    if (raw == null) return '';
+    if (raw is String) return raw;
+    if (raw is Map || raw is List) {
+      try {
+        return jsonEncode(raw);
+      } catch (_) {
+        return raw.toString();
+      }
+    }
+    return raw.toString();
+  }
+
   factory ServiceOrderModel.fromMap(Map<String, dynamic> map, {String? docId}) {
     final now = DateTime.now();
     return ServiceOrderModel(
@@ -159,7 +174,9 @@ class ServiceOrderModel {
       profileId: map['profile_id']?.toString() ?? '',
       profileCode: map['profile_code']?.toString() ?? '',
       lastUpdatedProfile: map['last_updated_profile']?.toString() ?? '',
-      additionalInfo: map['additional_info']?.toString() ?? '',
+      additionalInfo: _normalizeAdditionalInfo(
+        map['additional_info'] ?? map['additionalInfo'],
+      ),
       paymentMode: map['payment_mode']?.toString() ?? '',
       advanceAmount: (map['advance_amount'] as num?)?.toDouble() ?? 0,
       dueDate: _parseTimestamp(map['due_date'], now),

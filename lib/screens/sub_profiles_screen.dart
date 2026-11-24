@@ -133,6 +133,15 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
     }
   }
 
+  int _nextPrefixNumber() {
+    var maxPrefix = 0;
+    for (final p in _subProfiles) {
+      final n = int.tryParse(p.prefix.trim()) ?? 0;
+      if (n > maxPrefix) maxPrefix = n;
+    }
+    return maxPrefix + 1;
+  }
+
   Future<void> _createSubProfile() async {
     if (_profileNameController.text.trim().isEmpty) {
       showSnackbar(
@@ -148,6 +157,18 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
       showSnackbar(
         context,
         'Profile name must be 12 characters or less',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    final nameTaken = _subProfiles.any(
+      (p) => p.name.trim().toLowerCase() == profileName.toLowerCase(),
+    );
+    if (nameTaken) {
+      showSnackbar(
+        context,
+        'A profile with this name already exists',
         backgroundColor: Colors.orange,
       );
       return;
@@ -173,34 +194,27 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
         return;
       }
 
-      // Generate a unique code (2-3 characters)
       final existingCodes = _subProfiles.map((p) => p.code).toSet();
       String code;
       do {
         code = _generateProfileCode();
       } while (existingCodes.contains(code));
 
-      // Get the next prefix number
-      final nextPrefix = _subProfiles.isEmpty
-          ? '1'
-          : (_subProfiles.length + 1).toString();
-
-      final profileData = {
-        'prefix': nextPrefix,
-        'name': profileName,
-        'code': code,
-        'avatar': 'default',
-        'pin': '',
-        'status': 'inactive',
-        'createdAt': DateTime.now(),
-        'updatedAt': DateTime.now(),
-      };
-
+      final now = DateTime.now();
       await _firestore
           .collection('users')
           .doc(userId)
           .collection('subProfiles')
-          .add(profileData);
+          .add({
+            'prefix': _nextPrefixNumber().toString(),
+            'name': profileName,
+            'code': code,
+            'avatar': 'default',
+            'pin': '',
+            'status': 'inactive',
+            'createdAt': now,
+            'updatedAt': now,
+          });
 
       _profileNameController.clear();
       await _loadSubProfiles();
@@ -237,6 +251,127 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
         (_) => chars.codeUnitAt(random.nextInt(chars.length)),
       ),
     );
+  }
+
+  Future<void> _renameSubProfile(
+    SubProfileModel profile,
+    String newName,
+  ) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) {
+      showSnackbar(
+        context,
+        'Profile name cannot be empty',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+    if (trimmed.length > 12) {
+      showSnackbar(
+        context,
+        'Profile name must be 12 characters or less',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+    if (trimmed == profile.name) return;
+
+    final duplicate = _subProfiles.any(
+      (p) =>
+          p.id != profile.id &&
+          p.name.trim().toLowerCase() == trimmed.toLowerCase(),
+    );
+    if (duplicate) {
+      showSnackbar(
+        context,
+        'Another profile already uses this name',
+        backgroundColor: Colors.orange,
+      );
+      return;
+    }
+
+    try {
+      final user = _auth.currentUser;
+      final userId = widget.userId.isNotEmpty ? widget.userId : user?.uid;
+      if (userId == null || userId.isEmpty) {
+        showSnackbar(
+          context,
+          'User not authenticated',
+          backgroundColor: Colors.red,
+        );
+        return;
+      }
+
+      await _firestore
+          .collection('users')
+          .doc(userId)
+          .collection('subProfiles')
+          .doc(profile.id)
+          .update({'name': trimmed, 'updatedAt': DateTime.now()});
+
+      if (ACTIVE_PROFILE_ID == profile.id) {
+        ACTIVE_PROFILE_NAME = trimmed;
+      }
+
+      await _loadSubProfiles();
+      if (mounted) {
+        showSnackbar(
+          context,
+          'Profile renamed successfully',
+          backgroundColor: Colors.green,
+        );
+      }
+    } catch (e) {
+      await logErrorToFile(e.toString(), StackTrace.current);
+      if (mounted) {
+        showSnackbar(
+          context,
+          'Failed to rename profile: $e',
+          backgroundColor: Colors.red,
+        );
+      }
+    }
+  }
+
+  Future<void> _showRenameDialog(SubProfileModel profile) async {
+    final controller = TextEditingController(text: profile.name);
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (dialogContext) {
+        return AlertDialog(
+          title: const Text('Rename Profile'),
+          content: TextFormField(
+            controller: controller,
+            autofocus: true,
+            maxLength: 12,
+            decoration: const InputDecoration(
+              labelText: 'Profile name',
+              border: OutlineInputBorder(),
+            ),
+            onFieldSubmitted: (value) =>
+                Navigator.of(dialogContext).pop(value.trim()),
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(dialogContext).pop(),
+              child: const Text('Cancel'),
+            ),
+            ElevatedButton(
+              onPressed: () =>
+                  Navigator.of(dialogContext).pop(controller.text.trim()),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: AppColors.primaryGreen,
+                foregroundColor: Colors.white,
+              ),
+              child: const Text('Save'),
+            ),
+          ],
+        );
+      },
+    );
+    controller.dispose();
+    if (newName == null || newName.isEmpty) return;
+    await _renameSubProfile(profile, newName);
   }
 
   Future<void> _activateSubProfile(SubProfileModel profile) async {
@@ -462,6 +597,8 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
                 keyboardType: TextInputType.text,
                 decoration: InputDecoration(
                   hintText: 'Profile name',
+                  helperText:
+                      'Add profiles one by one. Mobile app shows up to 10.',
                   border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(10),
                     borderSide: BorderSide(
@@ -580,6 +717,7 @@ class _SubProfilesScreenState extends State<SubProfilesScreen> {
                                       profile,
                                       newStatus,
                                     ),
+                                onRename: () => _showRenameDialog(profile),
                               ),
                             ),
                           );
@@ -603,6 +741,7 @@ class SubProfileCard extends StatefulWidget {
   final bool isActivating;
   final VoidCallback onActivate;
   final Future<void> Function(String newStatus)? onStatusChanged;
+  final VoidCallback? onRename;
 
   const SubProfileCard({
     super.key,
@@ -612,6 +751,7 @@ class SubProfileCard extends StatefulWidget {
     required this.isActivating,
     required this.onActivate,
     this.onStatusChanged,
+    this.onRename,
   });
 
   @override
@@ -628,11 +768,22 @@ class _SubProfileCardState extends State<SubProfileCard> {
   bool _flashOnScan = false;
   bool _voiceBillingEnabled = false;
   bool _barcodeScanningEnabled = false;
+  bool _scanServiceOrders = false;
+  bool _scanBills = false;
   bool _repeatScanning = false;
   bool _externalScanner = false;
   bool _scannedItemConfirmation = false;
   bool _directItemAdditionEnabled = false;
+  bool _enableServices = false;
+  bool _tableStyleBillingEnabled = false;
+  bool _tableStyleServiceItemsEnabled = false;
+  bool _enableItemMrp = false;
+  bool _enableItemDiscount = false;
+  bool _editPriceWhileBilling = false;
   String _receiptSize = kDefaultReceiptSize;
+  String _labelSize = kDefaultLabelSize;
+  String _labelPrinterName = kDefaultLabelPrinterName;
+  String _labelGap = kDefaultLabelGap;
 
   final Map<String, bool> _enabled = {
     'Bills': false,
@@ -645,7 +796,8 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Contacts': false,
     'Services': false,
     'Notifications': false,
-    'Purchase Entry': false,
+    'Purchase List': false,
+    'Suppliers': false,
     'Button': false,
   };
   final Map<String, bool> _itemsOptions = {
@@ -668,6 +820,7 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'View sales report': false,
     'View invoice report': false,
     'View inventory report': false,
+    'View purchase report': false,
   };
   final Map<String, bool> _dashBoardOptions = {
     'Revenue Summary': false,
@@ -676,14 +829,30 @@ class _SubProfileCardState extends State<SubProfileCard> {
     'Item Summary': false,
   };
   final Map<String, bool> _servicesOptions = {
-    'Service orders': false,
+    'View all orders': false,
+    'View location orders': false,
+    'View profile orders only': false,
     'Services': false,
     'Service reports': false,
   };
   final Map<String, bool> _billsOptions = {
     'View all bills': false,
+    'View location bills': false,
     'View profile bills only': false,
     'Edit bill templates': false,
+    'Allow editing bill': true,
+  };
+
+  static const _billViewScopeKeys = {
+    'View all bills',
+    'View location bills',
+    'View profile bills only',
+  };
+
+  static const _serviceOrderViewScopeKeys = {
+    'View all orders',
+    'View location orders',
+    'View profile orders only',
   };
 
   @override
@@ -723,6 +892,11 @@ class _SubProfileCardState extends State<SubProfileCard> {
             perms.forEach((k, v) {
               if (_enabled.containsKey(k)) _enabled[k] = (v == true);
             });
+            // Migrate legacy permission key.
+            if (perms.containsKey('Purchase Entry') &&
+                !perms.containsKey('Purchase List')) {
+              _enabled['Purchase List'] = perms['Purchase Entry'] == true;
+            }
             if (_enabled['Dashboard'] != true &&
                 perms.containsKey('Revenue Summary')) {
               _enabled['Dashboard'] = perms['Revenue Summary'] == true;
@@ -761,8 +935,34 @@ class _SubProfileCardState extends State<SubProfileCard> {
                 _servicesOptions[k] = (v == true);
               }
             });
+            final viewAllOrders = _servicesOptions['View all orders'] == true;
+            final viewLocationOrders =
+                _servicesOptions['View location orders'] == true;
+            final viewProfileOrders =
+                _servicesOptions['View profile orders only'] == true;
+            final legacyServiceOrders = services['Service orders'] == true;
+            if (viewAllOrders) {
+              _servicesOptions['View location orders'] = false;
+              _servicesOptions['View profile orders only'] = false;
+            } else if (viewLocationOrders) {
+              _servicesOptions['View all orders'] = false;
+              _servicesOptions['View profile orders only'] = false;
+            } else if (viewProfileOrders) {
+              _servicesOptions['View all orders'] = false;
+              _servicesOptions['View location orders'] = false;
+            } else if (legacyServiceOrders || _enabled['Services'] == true) {
+              _servicesOptions['View profile orders only'] = true;
+            }
+            if (_enabled['Services'] == true &&
+                !_serviceOrderViewScopeKeys
+                    .any((k) => _servicesOptions[k] == true) &&
+                _servicesOptions['Services'] != true &&
+                _servicesOptions['Service reports'] != true) {
+              _servicesOptions['View profile orders only'] = true;
+              _servicesOptions['Services'] = true;
+            }
           } else if (_enabled['Services'] == true) {
-            _servicesOptions['Service orders'] = true;
+            _servicesOptions['View profile orders only'] = true;
             _servicesOptions['Services'] = true;
           }
           if (bills != null) {
@@ -771,8 +971,26 @@ class _SubProfileCardState extends State<SubProfileCard> {
                 _billsOptions[k] = (v == true);
               }
             });
+            final viewAll = _billsOptions['View all bills'] == true;
+            final viewLocation = _billsOptions['View location bills'] == true;
+            final viewProfile =
+                _billsOptions['View profile bills only'] == true;
+            if (viewAll) {
+              _billsOptions['View location bills'] = false;
+              _billsOptions['View profile bills only'] = false;
+            } else if (viewLocation) {
+              _billsOptions['View all bills'] = false;
+              _billsOptions['View profile bills only'] = false;
+            } else if (!viewProfile) {
+              _billsOptions['View profile bills only'] = true;
+            }
           } else if (_enabled['Bills'] == true) {
             _billsOptions['View profile bills only'] = true;
+            _billsOptions['Allow editing bill'] = true;
+          }
+          // Older profiles may omit this key — keep default enabled.
+          if (bills == null || !bills.containsKey('Allow editing bill')) {
+            _billsOptions['Allow editing bill'] = true;
           }
           if (settings != null) {
             if (settings['flashOnScan'] != null) {
@@ -782,7 +1000,14 @@ class _SubProfileCardState extends State<SubProfileCard> {
               _voiceBillingEnabled = settings['voiceBillingEnabled'] == true;
             }
             if (settings['barcodeScanningEnabled'] != null) {
-              _barcodeScanningEnabled = settings['barcodeScanningEnabled'] == true;
+              _barcodeScanningEnabled =
+                  settings['barcodeScanningEnabled'] == true;
+            }
+            if (settings['scanServiceOrders'] != null) {
+              _scanServiceOrders = settings['scanServiceOrders'] == true;
+            }
+            if (settings['scanBills'] != null) {
+              _scanBills = settings['scanBills'] == true;
             }
             if (settings['repeatScanning'] != null) {
               _repeatScanning = settings['repeatScanning'] == true;
@@ -791,14 +1016,53 @@ class _SubProfileCardState extends State<SubProfileCard> {
               _externalScanner = settings['externalScanner'] == true;
             }
             if (settings['scannedItemConfirmation'] != null) {
-              _scannedItemConfirmation = settings['scannedItemConfirmation'] == true;
+              _scannedItemConfirmation =
+                  settings['scannedItemConfirmation'] == true;
             }
             if (settings['directItemAdditionEnabled'] != null) {
               _directItemAdditionEnabled =
                   settings['directItemAdditionEnabled'] == true;
             }
+            if (settings['enableServices'] != null) {
+              _enableServices = settings['enableServices'] == true;
+            }
+            if (settings['enableTableStyleBilling'] != null) {
+              _tableStyleBillingEnabled =
+                  settings['enableTableStyleBilling'] == true;
+            }
+            if (settings['enableTableStyleServiceItems'] != null) {
+              _tableStyleServiceItemsEnabled =
+                  settings['enableTableStyleServiceItems'] == true;
+            }
+            if (settings['enableItemMrp'] != null ||
+                settings['enableItemDiscount'] != null) {
+              if (settings['enableItemMrp'] != null) {
+                _enableItemMrp = settings['enableItemMrp'] == true;
+              }
+              if (settings['enableItemDiscount'] != null) {
+                _enableItemDiscount = settings['enableItemDiscount'] == true;
+              }
+            } else if (settings['enableMrpDiscount'] != null) {
+              final legacy = settings['enableMrpDiscount'] == true;
+              _enableItemMrp = legacy;
+              _enableItemDiscount = legacy;
+            }
+            if (settings['editPriceWhileBilling'] != null) {
+              _editPriceWhileBilling =
+                  settings['editPriceWhileBilling'] == true;
+            }
             if (settings['receiptSize'] != null) {
               _receiptSize = receiptSizeFromRemote(settings['receiptSize']);
+            }
+            if (settings['labelSize'] != null) {
+              _labelSize = labelSizeFromRemote(settings['labelSize']);
+            }
+            if (settings['labelPrinterName'] != null) {
+              _labelPrinterName =
+                  labelPrinterNameFromRemote(settings['labelPrinterName']);
+            }
+            if (settings['labelGap'] != null) {
+              _labelGap = labelGapFromRemote(settings['labelGap']);
             }
           }
         });
@@ -816,11 +1080,22 @@ class _SubProfileCardState extends State<SubProfileCard> {
         'flashOnScan': _flashOnScan,
         'voiceBillingEnabled': _voiceBillingEnabled,
         'barcodeScanningEnabled': _barcodeScanningEnabled,
+        'scanServiceOrders': _scanServiceOrders,
+        'scanBills': _scanBills,
         'repeatScanning': _repeatScanning,
         'externalScanner': _externalScanner,
         'scannedItemConfirmation': _scannedItemConfirmation,
         'directItemAdditionEnabled': _directItemAdditionEnabled,
+        'enableServices': _enableServices,
+        'enableTableStyleBilling': _tableStyleBillingEnabled,
+        'enableTableStyleServiceItems': _tableStyleServiceItemsEnabled,
+        'enableItemMrp': _enableItemMrp,
+        'enableItemDiscount': _enableItemDiscount,
+        'editPriceWhileBilling': _editPriceWhileBilling,
         'receiptSize': _receiptSize,
+        'labelSize': _labelSize,
+        'labelPrinterName': _labelPrinterName,
+        'labelGap': _labelGap,
       };
 
   Future<void> _saveSettings() async {
@@ -852,9 +1127,16 @@ class _SubProfileCardState extends State<SubProfileCard> {
         _categoriesOptions.values.every((v) => v) &&
         _reportsOptions.values.every((v) => v) &&
         _dashBoardOptions.values.every((v) => v) &&
-        _servicesOptions.values.every((v) => v) &&
+        _servicesOptions['View all orders'] == true &&
+        _servicesOptions['View location orders'] != true &&
+        _servicesOptions['View profile orders only'] != true &&
+        _servicesOptions['Services'] == true &&
+        _servicesOptions['Service reports'] == true &&
         _billsOptions['View all bills'] == true &&
-        _billsOptions['Edit bill templates'] == true;
+        _billsOptions['View location bills'] != true &&
+        _billsOptions['View profile bills only'] != true &&
+        _billsOptions['Edit bill templates'] == true &&
+        _billsOptions['Allow editing bill'] == true;
   }
 
   bool? get _selectAllCheckboxValue {
@@ -897,13 +1179,23 @@ class _SubProfileCardState extends State<SubProfileCard> {
       _dashBoardOptions[key] = selected;
     }
     for (final key in _servicesOptions.keys) {
-      _servicesOptions[key] = selected;
+      if (selected) {
+        _servicesOptions['View all orders'] = true;
+        _servicesOptions['View location orders'] = false;
+        _servicesOptions['View profile orders only'] = false;
+        _servicesOptions['Services'] = true;
+        _servicesOptions['Service reports'] = true;
+      } else {
+        _servicesOptions[key] = false;
+      }
     }
     for (final key in _billsOptions.keys) {
       if (selected) {
         _billsOptions['View all bills'] = true;
+        _billsOptions['View location bills'] = false;
         _billsOptions['View profile bills only'] = false;
         _billsOptions['Edit bill templates'] = true;
+        _billsOptions['Allow editing bill'] = true;
       } else {
         _billsOptions[key] = false;
       }
@@ -933,7 +1225,11 @@ class _SubProfileCardState extends State<SubProfileCard> {
         'categoriesOptions': _categoriesOptions,
         'reportsOptions': _reportsOptions,
         'dashBoardOptions': _dashBoardOptions,
-        'servicesOptions': _servicesOptions,
+        // Clear legacy "Service orders" key so only the 3 view scopes remain.
+        'servicesOptions': {
+          ..._servicesOptions,
+          'Service orders': false,
+        },
         'billsOptions': _billsOptions,
       }, SetOptions(merge: true));
     } catch (e) {
@@ -1093,41 +1389,55 @@ class _SubProfileCardState extends State<SubProfileCard> {
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Row(
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text(
-                            widget.profile.name,
-                            style: TextStyle(
-                              fontSize: 16,
-                              fontWeight: FontWeight.w500,
-                              color: AppColors.primaryGreen,
+                          Expanded(
+                            child: Text(
+                              widget.profile.name,
+                              style: TextStyle(
+                                fontSize: 16,
+                                fontWeight: FontWeight.w500,
+                                color: AppColors.primaryGreen,
+                              ),
+                              overflow: TextOverflow.ellipsis,
                             ),
                           ),
-                          widget.profile.status == 'active'
-                              ? Container(
-                                  decoration: BoxDecoration(
-                                    color: AppColors.primaryWhite.withOpacity(
-                                      0.3,
-                                    ),
-                                    shape: BoxShape.circle,
-                                    boxShadow: const [
-                                      BoxShadow(
-                                        color: Colors.black12,
-                                        blurRadius: 4,
-                                        offset: Offset(0, 2),
-                                      ),
-                                    ],
+                          if (widget.onRename != null)
+                            IconButton(
+                              tooltip: 'Rename',
+                              padding: EdgeInsets.zero,
+                              constraints: const BoxConstraints(
+                                minWidth: 32,
+                                minHeight: 32,
+                              ),
+                              icon: Icon(
+                                Icons.edit_outlined,
+                                size: 18,
+                                color: AppColors.primaryGrey,
+                              ),
+                              onPressed: widget.onRename,
+                            ),
+                          if (widget.profile.status == 'active')
+                            Container(
+                              decoration: BoxDecoration(
+                                color: AppColors.primaryWhite.withOpacity(0.3),
+                                shape: BoxShape.circle,
+                                boxShadow: const [
+                                  BoxShadow(
+                                    color: Colors.black12,
+                                    blurRadius: 4,
+                                    offset: Offset(0, 2),
                                   ),
-                                  child: Padding(
-                                    padding: const EdgeInsets.all(2.0),
-                                    child: Icon(
-                                      Icons.check_circle,
-                                      size: 20,
-                                      color: AppColors.activeGreen,
-                                    ),
-                                  ),
-                                )
-                              : Container(),
+                                ],
+                              ),
+                              child: Padding(
+                                padding: const EdgeInsets.all(2.0),
+                                child: Icon(
+                                  Icons.check_circle,
+                                  size: 20,
+                                  color: AppColors.activeGreen,
+                                ),
+                              ),
+                            ),
                         ],
                       ),
                       const SizedBox(height: 5),
@@ -1451,23 +1761,28 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                                 onChanged: (v) {
                                                   setState(() {
                                                     final checked = v ?? false;
-                                                    if (sub == 'View all bills' &&
-                                                        checked) {
-                                                      _billsOptions[
-                                                              'View profile bills only'] =
-                                                          false;
-                                                      _billsOptions[sub] = true;
-                                                    } else if (sub ==
-                                                            'View profile bills only' &&
-                                                        checked) {
-                                                      _billsOptions[
-                                                          'View all bills'] = false;
-                                                      _billsOptions[sub] = true;
-                                                    } else if (sub ==
-                                                            'View all bills' ||
-                                                        sub ==
-                                                            'View profile bills only') {
-                                                      _billsOptions[sub] = false;
+                                                    if (_billViewScopeKeys
+                                                        .contains(sub)) {
+                                                      if (checked) {
+                                                        for (final key
+                                                            in _billViewScopeKeys) {
+                                                          _billsOptions[key] =
+                                                              key == sub;
+                                                        }
+                                                      } else {
+                                                        _billsOptions[sub] =
+                                                            false;
+                                                        // Always keep one view scope selected.
+                                                        if (!_billViewScopeKeys
+                                                            .any((k) =>
+                                                                _billsOptions[
+                                                                    k] ==
+                                                                true)) {
+                                                          _billsOptions[
+                                                                  'View profile bills only'] =
+                                                              true;
+                                                        }
+                                                      }
                                                     } else {
                                                       _billsOptions[sub] =
                                                           checked;
@@ -1696,8 +2011,33 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                                 value: _servicesOptions[sub],
                                                 onChanged: (v) {
                                                   setState(() {
-                                                    _servicesOptions[sub] =
-                                                        v ?? false;
+                                                    final checked = v ?? false;
+                                                    if (_serviceOrderViewScopeKeys
+                                                        .contains(sub)) {
+                                                      if (checked) {
+                                                        for (final key
+                                                            in _serviceOrderViewScopeKeys) {
+                                                          _servicesOptions[key] =
+                                                              key == sub;
+                                                        }
+                                                      } else {
+                                                        _servicesOptions[sub] =
+                                                            false;
+                                                        // Always keep one view scope selected when Services is in use.
+                                                        if (!_serviceOrderViewScopeKeys
+                                                            .any((k) =>
+                                                                _servicesOptions[
+                                                                    k] ==
+                                                                true)) {
+                                                          _servicesOptions[
+                                                                  'View profile orders only'] =
+                                                              true;
+                                                        }
+                                                      }
+                                                    } else {
+                                                      _servicesOptions[sub] =
+                                                          checked;
+                                                    }
                                                   });
                                                 },
                                               ),
@@ -1850,6 +2190,20 @@ class _SubProfileCardState extends State<SubProfileCard> {
                               ),
                               SwitchListTile(
                                 contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable services'),
+                                subtitle: Text(
+                                  'Show the New service order option in the home bill-type confirmation dialog for this profile.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _enableServices,
+                                onChanged: (val) =>
+                                    setState(() => _enableServices = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
                                 title: const Text('Voice billing'),
                                 subtitle: Text(
                                   'Allow microphone voice search to add items while billing.',
@@ -1876,6 +2230,34 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                 onChanged: (val) => setState(
                                   () => _barcodeScanningEnabled = val,
                                 ),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Scan service orders'),
+                                subtitle: Text(
+                                  'Show a scan button on service orders. Scan a service barcode to open that order.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _scanServiceOrders,
+                                onChanged: (val) =>
+                                    setState(() => _scanServiceOrders = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Scan Bills'),
+                                subtitle: Text(
+                                  'Show a scan button on the home screen. Scan a bill barcode to open that bill.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _scanBills,
+                                onChanged: (val) =>
+                                    setState(() => _scanBills = val),
                               ),
                               SwitchListTile(
                                 contentPadding: EdgeInsets.zero,
@@ -1935,8 +2317,228 @@ class _SubProfileCardState extends State<SubProfileCard> {
                                   () => _directItemAdditionEnabled = val,
                                 ),
                               ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable table style billing'),
+                                subtitle: Text(
+                                  'Enter bill items in a table: search category, sell price, then quantity.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _tableStyleBillingEnabled,
+                                onChanged: (val) => setState(
+                                  () => _tableStyleBillingEnabled = val,
+                                ),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text(
+                                  'Enable table style service items',
+                                ),
+                                subtitle: Text(
+                                  'Enter service items in a table: search category, sell price, then quantity.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _tableStyleServiceItemsEnabled,
+                                onChanged: (val) => setState(
+                                  () => _tableStyleServiceItemsEnabled = val,
+                                ),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable item MRP'),
+                                subtitle: Text(
+                                  'Show MRP field when adding or editing items and in billing for this profile.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _enableItemMrp,
+                                onChanged: (val) =>
+                                    setState(() => _enableItemMrp = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Enable item discount'),
+                                subtitle: Text(
+                                  'Show discount field when adding or editing items and in billing for this profile.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _enableItemDiscount,
+                                onChanged: (val) =>
+                                    setState(() => _enableItemDiscount = val),
+                              ),
+                              SwitchListTile(
+                                contentPadding: EdgeInsets.zero,
+                                title: const Text('Edit price while billing'),
+                                subtitle: Text(
+                                  'Allow changing sell price in table-style billing and the scanned-item confirmation dialog.',
+                                  style: TextStyle(
+                                    fontSize: 12,
+                                    color: Colors.grey[600],
+                                  ),
+                                ),
+                                value: _editPriceWhileBilling,
+                                onChanged: (val) => setState(
+                                  () => _editPriceWhileBilling = val,
+                                ),
+                              ),
                               Padding(
                                 padding: const EdgeInsets.only(top: 8, bottom: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Label size',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Width and height of item labels for this sub-profile\'s label printer.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DropdownButtonFormField<String>(
+                                      value: _labelSize,
+                                      isExpanded: true,
+                                      items: LABEL_SIZE_OPTIONS
+                                          .map(
+                                            (size) => DropdownMenuItem(
+                                              value: size,
+                                              child: Text(
+                                                size == '70mm * 15mm'
+                                                    ? '70mm × 15mm (Jewel Tag)'
+                                                    : size.replaceAll('*', '×'),
+                                              ),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (val) {
+                                        if (val == null) return;
+                                        setState(() => _labelSize = val);
+                                      },
+                                      decoration: const InputDecoration(
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                      ),
+                  ),
+          ],
+        ),
+      ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 12, bottom: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Label printer',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Brand of this sub-profile\'s label printer.',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DropdownButtonFormField<String>(
+                                      value: _labelPrinterName,
+                                      isExpanded: true,
+                                      items: LABEL_PRINTER_NAME_OPTIONS
+                                          .map(
+                                            (name) => DropdownMenuItem(
+                                              value: name,
+                                              child: Text(name),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (val) {
+                                        if (val == null) return;
+                                        setState(() => _labelPrinterName = val);
+                                      },
+                                      decoration: const InputDecoration(
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 12, bottom: 4),
+                                child: Column(
+                                  crossAxisAlignment: CrossAxisAlignment.start,
+                                  children: [
+                                    const Text(
+                                      'Label gap',
+                                      style: TextStyle(
+                                        fontSize: 14,
+                                        fontWeight: FontWeight.w500,
+                                      ),
+                                    ),
+                                    Text(
+                                      'Gap between labels on the roll for this sub-profile (1mm, 2mm, or 3mm).',
+                                      style: TextStyle(
+                                        fontSize: 12,
+                                        color: Colors.grey[600],
+                                      ),
+                                    ),
+                                    const SizedBox(height: 8),
+                                    DropdownButtonFormField<String>(
+                                      value: _labelGap,
+                                      isExpanded: true,
+                                      items: LABEL_GAP_OPTIONS
+                                          .map(
+                                            (gap) => DropdownMenuItem(
+                                              value: gap,
+                                              child: Text(gap),
+                                            ),
+                                          )
+                                          .toList(),
+                                      onChanged: (val) {
+                                        if (val == null) return;
+                                        setState(() => _labelGap = val);
+                                      },
+                                      decoration: const InputDecoration(
+                                        border: OutlineInputBorder(),
+                                        contentPadding: EdgeInsets.symmetric(
+                                          horizontal: 12,
+                                          vertical: 8,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              Padding(
+                                padding:
+                                    const EdgeInsets.only(top: 12, bottom: 4),
                                 child: Column(
                                   crossAxisAlignment: CrossAxisAlignment.start,
                                   children: [

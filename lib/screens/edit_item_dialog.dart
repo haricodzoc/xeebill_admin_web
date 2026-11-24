@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import '../models/category_model.dart';
 import '../models/item_model.dart';
+import '../utils/constants.dart';
+import '../utils/units_remote_config.dart';
 
 class EditItemDialog extends StatefulWidget {
   final ItemModel item;
@@ -33,13 +35,13 @@ class _EditItemDialogState extends State<EditItemDialog> {
   final TextEditingController _hsnController = TextEditingController();
   final TextEditingController _taxPercController = TextEditingController();
   final TextEditingController _descriptionController = TextEditingController();
-  final TextEditingController _unitController = TextEditingController();
 
   // State
   List<CategoryModel> _categories = [];
   CategoryModel? _selectedCategory;
   bool _isLoadingCategories = true;
   bool _isSaving = false;
+  String? _selectedUnit;
 
   // Dynamic attributes
   Map<String, List<String>> _categoryAttributes = {};
@@ -50,15 +52,51 @@ class _EditItemDialogState extends State<EditItemDialog> {
   // HSN warning
   bool _showHsnWarning = false;
 
+  List<String> get _unitDisplayNames {
+    return UNITS
+        .map((unit) => (unit['name'] as String?)?.trim() ?? '')
+        .where((n) => n.isNotEmpty)
+        .toList();
+  }
+
   @override
   void initState() {
     super.initState();
     _initializeFields();
     _loadCategories();
+    ensureUnitsLoaded().then((_) {
+      if (!mounted) return;
+      setState(_syncSelectedUnit);
+    });
   }
 
   // Store item attributes temporarily to load after category attributes
   Map<String, dynamic> _itemAttributes = {};
+
+  void _syncSelectedUnit() {
+    final names = _unitDisplayNames;
+    final current = widget.item.unit.trim();
+    if (current.isNotEmpty && names.contains(current)) {
+      _selectedUnit = current;
+      return;
+    }
+    // Match by abbreviation (e.g. pcs → Piece).
+    for (final unit in UNITS) {
+      final name = (unit['name'] as String?)?.trim() ?? '';
+      final abbr = (unit['abbreviation'] as String?)?.trim() ?? '';
+      if (name.isEmpty) continue;
+      if (current.toLowerCase() == abbr.toLowerCase() ||
+          current.toLowerCase() == name.toLowerCase()) {
+        _selectedUnit = name;
+        return;
+      }
+    }
+    if (_selectedUnit != null && !names.contains(_selectedUnit)) {
+      _selectedUnit = names.contains('Piece')
+          ? 'Piece'
+          : (names.isNotEmpty ? names.first : null);
+    }
+  }
 
   void _initializeFields() {
     _nameController.text = widget.item.name;
@@ -68,7 +106,7 @@ class _EditItemDialogState extends State<EditItemDialog> {
     _hsnController.text = widget.item.hsnCode ?? '';
     _taxPercController.text = widget.item.taxPerc?.toStringAsFixed(2) ?? '0.0';
     _descriptionController.text = widget.item.description ?? '';
-    _unitController.text = widget.item.unit;
+    _syncSelectedUnit();
 
     // Store item attributes temporarily (will be loaded after category attributes)
     if (widget.item.attributes.isNotEmpty) {
@@ -369,8 +407,8 @@ class _EditItemDialogState extends State<EditItemDialog> {
         printed: widget.item.printed,
         mapped: widget.item.mapped,
         active: widget.item.active,
-        unit: _unitController.text.trim().isNotEmpty
-            ? _unitController.text.trim()
+        unit: (_selectedUnit?.trim().isNotEmpty == true)
+            ? _selectedUnit!.trim()
             : widget.item.unit,
         scannedBarcode: widget.item.scannedBarcode,
         listedOnline: widget.item.listedOnline,
@@ -442,7 +480,6 @@ class _EditItemDialogState extends State<EditItemDialog> {
     _hsnController.dispose();
     _taxPercController.dispose();
     _descriptionController.dispose();
-    _unitController.dispose();
     _textFieldControllers.values.forEach((c) => c.dispose());
     super.dispose();
   }
@@ -786,9 +823,26 @@ class _EditItemDialogState extends State<EditItemDialog> {
                           ),
                         ),
                       const SizedBox(height: 16),
-                      // Unit
-                      TextFormField(
-                        controller: _unitController,
+                      DropdownButtonFormField<String>(
+                        value: _selectedUnit != null &&
+                                _unitDisplayNames.contains(_selectedUnit)
+                            ? _selectedUnit
+                            : null,
+                        items: [
+                          const DropdownMenuItem(
+                            value: null,
+                            child: Text('Select unit'),
+                          ),
+                          ..._unitDisplayNames.map(
+                            (name) => DropdownMenuItem(
+                              value: name,
+                              child: Text(name),
+                            ),
+                          ),
+                        ],
+                        onChanged: (value) {
+                          setState(() => _selectedUnit = value);
+                        },
                         decoration: const InputDecoration(
                           labelText: 'Unit',
                           border: OutlineInputBorder(),

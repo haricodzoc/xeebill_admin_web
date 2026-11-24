@@ -5,6 +5,7 @@ import 'package:flutter/material.dart';
 import '../models/category_model.dart';
 import '../models/item_model.dart';
 import '../utils/constants.dart';
+import '../utils/units_remote_config.dart';
 import 'deleted_category_items_screen.dart';
 import 'hsn_gst_rates_screen.dart';
 import 'import_categories_screen.dart';
@@ -586,6 +587,8 @@ class _CategoriesScreenState extends State<CategoriesScreen> {
   }
 
   Future<void> _showEditCategoryDialog(CategoryModel category) async {
+    await ensureUnitsLoaded();
+    if (!mounted) return;
     final nameController = TextEditingController(text: category.name);
     final taxController = TextEditingController(
       text: category.taxPercentage.toStringAsFixed(2),

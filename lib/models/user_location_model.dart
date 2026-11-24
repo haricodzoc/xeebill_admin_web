@@ -9,6 +9,8 @@ class UserLocationModel {
   final String businessGstNumber;
   final String gstType;
   final String address;
+  final double? latitude;
+  final double? longitude;
   final List<String> subProfileIds;
   /// Firestore `isDefault` / `is_default`. Default location is account fallback.
   final bool isDefault;
@@ -21,9 +23,13 @@ class UserLocationModel {
     required this.businessGstNumber,
     required this.gstType,
     required this.address,
+    this.latitude,
+    this.longitude,
     required this.subProfileIds,
     this.isDefault = false,
   });
+
+  bool get hasMapPin => latitude != null && longitude != null;
 
   static List<String> _parseSubProfileIds(dynamic raw) {
     if (raw == null) return [];
@@ -54,6 +60,12 @@ class UserLocationModel {
     return s == 'true' || s == '1' || s == 'yes';
   }
 
+  static double? _readDouble(dynamic v) {
+    if (v == null) return null;
+    if (v is num) return v.toDouble();
+    return double.tryParse(v.toString().trim());
+  }
+
   factory UserLocationModel.fromFirestore(
     DocumentSnapshot<Map<String, dynamic>> doc,
   ) {
@@ -74,6 +86,8 @@ class UserLocationModel {
       ]),
       gstType: _str(d, ['gstType', 'gst_type']),
       address: _str(d, ['address']),
+      latitude: _readDouble(d['latitude'] ?? d['lat']),
+      longitude: _readDouble(d['longitude'] ?? d['lng'] ?? d['lon']),
       subProfileIds: _parseSubProfileIds(
         d['subProfileIds'] ?? d['sub_profile_ids'],
       ),

@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../models/sub_profile_model.dart';
 import '../models/user_location_model.dart';
 import '../utils/app_colors.dart';
+import 'location_map_view.dart';
 
 /// Bootstrap payload from [CustomersScreen] prefetch (optional).
 class UserLocationsBootstrap {
@@ -48,7 +49,69 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
   /// Fallback business fields from the parent user doc (for default location card).
   String _userBusinessName = '';
   String _userBusinessAddress = '';
-  int _locationLimit = 1;
+  String _userBusinessPhone = '';
+  String _userBusinessGst = '';
+  String _userGstType = 'Regular';
+
+  UserLocationModel _copyLocation(
+    UserLocationModel old, {
+    String? name,
+    String? businessName,
+    String? businessPhoneNumber,
+    String? businessGstNumber,
+    String? gstType,
+    String? address,
+    double? latitude,
+    double? longitude,
+    bool clearCoordinates = false,
+    List<String>? subProfileIds,
+    bool? isDefault,
+  }) {
+    return UserLocationModel(
+      id: old.id,
+      name: name ?? old.name,
+      businessName: businessName ?? old.businessName,
+      businessPhoneNumber: businessPhoneNumber ?? old.businessPhoneNumber,
+      businessGstNumber: businessGstNumber ?? old.businessGstNumber,
+      gstType: gstType ?? old.gstType,
+      address: address ?? old.address,
+      latitude: clearCoordinates ? null : (latitude ?? old.latitude),
+      longitude: clearCoordinates ? null : (longitude ?? old.longitude),
+      subProfileIds: subProfileIds ?? old.subProfileIds,
+      isDefault: isDefault ?? old.isDefault,
+    );
+  }
+
+  Future<LocationMapResult?> _openLocationMap({
+    double? latitude,
+    double? longitude,
+    String initialQuery = '',
+  }) {
+    return Navigator.push<LocationMapResult>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => LocationMapView(
+          initialLatitude: latitude,
+          initialLongitude: longitude,
+          initialQuery: initialQuery,
+        ),
+      ),
+    );
+  }
+
+  Widget _mapPinButton({
+    required bool pinned,
+    required VoidCallback onPressed,
+  }) {
+    return OutlinedButton.icon(
+      onPressed: onPressed,
+      icon: Icon(
+        pinned ? Icons.location_on : Icons.add_location_alt_outlined,
+        size: 18,
+      ),
+      label: Text(pinned ? 'Change location' : 'Set location on map'),
+    );
+  }
 
   @override
   void initState() {
@@ -96,34 +159,18 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
           .toString()
           .trim();
       _userBusinessAddress = (data['address'] ?? '').toString().trim();
-
-      final planIdRaw = data['planId'] ?? data['plan_id'];
-      final planId = planIdRaw?.toString().trim() ?? '';
-      if (planId.isEmpty) {
-        _locationLimit = 1;
-        return;
-      }
-
-      final plansSnap = await FirebaseFirestore.instance
-          .collection('recharge_plans')
-          .where('plan_id', isEqualTo: planId)
-          .limit(1)
-          .get();
-      if (plansSnap.docs.isNotEmpty) {
-        final p = plansSnap.docs.first.data();
-        final limit = p['location_limit'];
-        if (limit is num) {
-          _locationLimit = limit.toInt();
-        } else {
-          _locationLimit = int.tryParse(limit?.toString() ?? '') ?? 1;
-        }
-        if (_locationLimit < 1) _locationLimit = 1;
-      } else {
-        _locationLimit = 1;
-      }
+      _userBusinessPhone = (data['phone'] ?? data['businessPhoneNumber'] ?? '')
+          .toString()
+          .trim();
+      _userBusinessGst = (data['gstNumber'] ?? data['businessGstNumber'] ?? '')
+          .toString()
+          .trim();
+      final gstRaw = (data['gstType'] ?? data['gst_type'] ?? 'Regular')
+          .toString()
+          .trim();
+      _userGstType = gstRaw.isEmpty ? 'Regular' : gstRaw;
     } catch (e) {
-      debugPrint('Failed loading user plan/business for locations: $e');
-      _locationLimit = 1;
+      debugPrint('Failed loading user business for locations: $e');
     }
   }
 
@@ -199,17 +246,9 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
       );
       final idx = _locations.indexWhere((l) => l.id == locationId);
       if (idx >= 0) {
-        final old = _locations[idx];
-        _locations[idx] = UserLocationModel(
-          id: old.id,
-          name: old.name,
-          businessName: old.businessName,
-          businessPhoneNumber: old.businessPhoneNumber,
-          businessGstNumber: old.businessGstNumber,
-          gstType: old.gstType,
-          address: old.address,
+        _locations[idx] = _copyLocation(
+          _locations[idx],
           subProfileIds: selected.toList(),
-          isDefault: old.isDefault,
         );
       }
     } catch (e) {
@@ -248,22 +287,6 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
         return 0;
       }
     }
-  }
-
-  Future<bool> _ensureCanAddLocation() async {
-    final currentCount = _additionalLocations.length;
-    // location_limit is total allowed additional locations (plan default 1).
-    if (currentCount < _locationLimit) return true;
-    if (!mounted) return false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(
-        content: Text(
-          'You have reached the maximum number of locations allowed in the current plan',
-        ),
-        backgroundColor: Colors.orange,
-      ),
-    );
-    return false;
   }
 
   Future<void> _confirmDeleteLocation(UserLocationModel location) async {
@@ -342,10 +365,20 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     }
   }
 
-  Future<void> _showDefaultLocationNameModal(UserLocationModel defaultLocation) async {
+  Future<void> _showDefaultLocationNameModal(
+    UserLocationModel defaultLocation,
+  ) async {
     final nameController = TextEditingController(text: defaultLocation.name);
+    final addressController = TextEditingController(
+      text: defaultLocation.address.trim().isNotEmpty
+          ? defaultLocation.address
+          : _userBusinessAddress,
+    );
     final formKey = GlobalKey<FormState>();
     var saving = false;
+    double? latitude = defaultLocation.latitude;
+    double? longitude = defaultLocation.longitude;
+    var clearCoordinates = false;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -355,108 +388,177 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
         return StatefulBuilder(
           builder: (ctx, setModalState) {
             return Padding(
-              padding: EdgeInsets.only(bottom: MediaQuery.of(ctx).viewInsets.bottom),
+              padding: EdgeInsets.only(
+                bottom: MediaQuery.of(ctx).viewInsets.bottom,
+              ),
               child: Container(
                 decoration: const BoxDecoration(
                   color: Colors.white,
                   borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
                 ),
                 padding: const EdgeInsets.fromLTRB(20, 16, 20, 24),
-                child: Form(
-                  key: formKey,
-                  child: Column(
-                    mainAxisSize: MainAxisSize.min,
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      const Text(
-                        'Edit default location',
-                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Items without a mapped location use this name.',
-                        style: TextStyle(fontSize: 13, color: AppColors.primaryGrey),
-                      ),
-                      const SizedBox(height: 16),
-                      TextFormField(
-                        controller: nameController,
-                        decoration: const InputDecoration(
-                          labelText: 'Location name',
-                          border: OutlineInputBorder(),
+                child: SingleChildScrollView(
+                  child: Form(
+                    key: formKey,
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        const Text(
+                          'Edit default location',
+                          style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.w600,
+                          ),
                         ),
-                        validator: (value) {
-                          if (value == null || value.trim().isEmpty) {
-                            return 'Location name is required';
-                          }
-                          return null;
-                        },
-                      ),
-                      const SizedBox(height: 20),
-                      ElevatedButton(
-                        onPressed: saving
-                            ? null
-                            : () async {
-                                if (!formKey.currentState!.validate()) return;
-                                setModalState(() => saving = true);
-                                try {
-                                  final name = nameController.text.trim();
-                                  await widget.userRef
-                                      .collection('locations')
-                                      .doc(defaultLocation.id)
-                                      .set({
-                                    'name': name,
-                                    'updatedAt': FieldValue.serverTimestamp(),
-                                  }, SetOptions(merge: true));
-                                  final idx = _locations
-                                      .indexWhere((l) => l.id == defaultLocation.id);
-                                  if (idx >= 0) {
-                                    final old = _locations[idx];
-                                    _locations[idx] = UserLocationModel(
-                                      id: old.id,
-                                      name: name,
-                                      businessName: old.businessName,
-                                      businessPhoneNumber: old.businessPhoneNumber,
-                                      businessGstNumber: old.businessGstNumber,
-                                      gstType: old.gstType,
-                                      address: old.address,
-                                      subProfileIds: old.subProfileIds,
-                                      isDefault: true,
-                                    );
-                                  }
-                                  if (mounted) setState(() {});
-                                  if (ctx.mounted) Navigator.pop(ctx);
-                                } catch (e) {
-                                  if (ctx.mounted) {
-                                    ScaffoldMessenger.of(ctx).showSnackBar(
-                                      SnackBar(
-                                        content: Text('Failed to update name: $e'),
-                                        backgroundColor: Colors.red,
-                                      ),
-                                    );
-                                  }
-                                } finally {
-                                  if (ctx.mounted) {
-                                    setModalState(() => saving = false);
-                                  }
+                        const SizedBox(height: 8),
+                        Text(
+                          'Items without a mapped location use this name.',
+                          style: TextStyle(
+                            fontSize: 13,
+                            color: AppColors.primaryGrey,
+                          ),
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: nameController,
+                          decoration: const InputDecoration(
+                            labelText: 'Location name',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Location name is required';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        TextFormField(
+                          controller: addressController,
+                          maxLines: 3,
+                          decoration: const InputDecoration(
+                            labelText: 'Location address',
+                            border: OutlineInputBorder(),
+                          ),
+                          validator: (value) {
+                            if (value == null || value.trim().isEmpty) {
+                              return 'Please enter a location address';
+                            }
+                            return null;
+                          },
+                        ),
+                        const SizedBox(height: 12),
+                        _mapPinButton(
+                          pinned: !clearCoordinates &&
+                              latitude != null &&
+                              longitude != null,
+                          onPressed: () async {
+                            final result = await _openLocationMap(
+                              latitude: clearCoordinates ? null : latitude,
+                              longitude: clearCoordinates ? null : longitude,
+                              initialQuery: addressController.text.trim(),
+                            );
+                            if (result == null) return;
+                            setModalState(() {
+                              if (result.cleared) {
+                                latitude = null;
+                                longitude = null;
+                                clearCoordinates = true;
+                              } else {
+                                latitude = result.latitude;
+                                longitude = result.longitude;
+                                clearCoordinates = false;
+                                final picked = result.address?.trim() ?? '';
+                                if (picked.isNotEmpty) {
+                                  addressController.text = picked;
                                 }
-                              },
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: AppColors.primaryGreen,
-                          foregroundColor: Colors.white,
-                          padding: const EdgeInsets.symmetric(vertical: 14),
+                              }
+                            });
+                          },
                         ),
-                        child: saving
-                            ? const SizedBox(
-                                width: 18,
-                                height: 18,
-                                child: CircularProgressIndicator(
-                                  strokeWidth: 2,
-                                  color: Colors.white,
-                                ),
-                              )
-                            : const Text('Save'),
-                      ),
-                    ],
+                        const SizedBox(height: 20),
+                        ElevatedButton(
+                          onPressed: saving
+                              ? null
+                              : () async {
+                                  if (!formKey.currentState!.validate()) return;
+                                  setModalState(() => saving = true);
+                                  try {
+                                    final name = nameController.text.trim();
+                                    final address =
+                                        addressController.text.trim();
+                                    final payload = <String, dynamic>{
+                                      'name': name,
+                                      'address': address,
+                                      'updatedAt': FieldValue.serverTimestamp(),
+                                    };
+                                    if (clearCoordinates) {
+                                      payload['latitude'] = FieldValue.delete();
+                                      payload['longitude'] =
+                                          FieldValue.delete();
+                                    } else {
+                                      payload['latitude'] = latitude;
+                                      payload['longitude'] = longitude;
+                                    }
+                                    await widget.userRef
+                                        .collection('locations')
+                                        .doc(defaultLocation.id)
+                                        .set(
+                                          payload,
+                                          SetOptions(merge: true),
+                                        );
+                                    final idx = _locations.indexWhere(
+                                      (l) => l.id == defaultLocation.id,
+                                    );
+                                    if (idx >= 0) {
+                                      _locations[idx] = _copyLocation(
+                                        _locations[idx],
+                                        name: name,
+                                        address: address,
+                                        latitude: latitude,
+                                        longitude: longitude,
+                                        clearCoordinates: clearCoordinates,
+                                        isDefault: true,
+                                      );
+                                    }
+                                    if (mounted) setState(() {});
+                                    if (ctx.mounted) Navigator.pop(ctx);
+                                  } catch (e) {
+                                    if (ctx.mounted) {
+                                      ScaffoldMessenger.of(ctx).showSnackBar(
+                                        SnackBar(
+                                          content: Text(
+                                            'Failed to update location: $e',
+                                          ),
+                                          backgroundColor: Colors.red,
+                                        ),
+                                      );
+                                    }
+                                  } finally {
+                                    if (ctx.mounted) {
+                                      setModalState(() => saving = false);
+                                    }
+                                  }
+                                },
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: AppColors.primaryGreen,
+                            foregroundColor: Colors.white,
+                            padding: const EdgeInsets.symmetric(vertical: 14),
+                          ),
+                          child: saving
+                              ? const SizedBox(
+                                  width: 18,
+                                  height: 18,
+                                  child: CircularProgressIndicator(
+                                    strokeWidth: 2,
+                                    color: Colors.white,
+                                  ),
+                                )
+                              : const Text('Save'),
+                        ),
+                      ],
+                    ),
                   ),
                 ),
               ),
@@ -467,6 +569,7 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     );
 
     nameController.dispose();
+    addressController.dispose();
   }
 
   Future<void> _showLocationModal({String? locationId}) async {
@@ -481,14 +584,31 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
       if (existing == null) return;
     }
 
+    final isEdit = existing != null;
     final nameController = TextEditingController(text: existing?.name ?? '');
-    final businessNameController = TextEditingController(text: existing?.businessName ?? '');
-    final businessPhoneController = TextEditingController(text: existing?.businessPhoneNumber ?? '');
-    final businessGstController = TextEditingController(text: existing?.businessGstNumber ?? '');
-    final addressController = TextEditingController(text: existing?.address ?? '');
+    final businessNameController = TextEditingController(
+      text: (existing?.businessName ?? '').trim().isNotEmpty
+          ? existing!.businessName
+          : _userBusinessName,
+    );
+    final businessPhoneController = TextEditingController(
+      text: (existing?.businessPhoneNumber ?? '').trim().isNotEmpty
+          ? existing!.businessPhoneNumber
+          : _userBusinessPhone,
+    );
+    final businessGstController = TextEditingController(
+      text: (existing?.businessGstNumber ?? '').trim().isNotEmpty
+          ? existing!.businessGstNumber
+          : _userBusinessGst,
+    );
+    final addressController = TextEditingController(
+      text: (existing?.address ?? '').trim().isNotEmpty
+          ? existing!.address
+          : _userBusinessAddress,
+    );
     String selectedGstType = (existing?.gstType ?? '').trim().isNotEmpty
         ? existing!.gstType
-        : 'Regular';
+        : (_userGstType.trim().isNotEmpty ? _userGstType : 'Regular');
     const gstChoices = ['Regular', 'Composition', 'Unregistered'];
     if (!gstChoices.contains(selectedGstType)) {
       selectedGstType = 'Regular';
@@ -499,6 +619,9 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
     }
 
     final formKey = GlobalKey<FormState>();
+    double? latitude = existing?.latitude;
+    double? longitude = existing?.longitude;
+    var clearCoordinates = false;
 
     await showModalBottomSheet<void>(
       context: context,
@@ -517,7 +640,8 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                 curve: Curves.easeOut,
                 padding: EdgeInsets.only(bottom: bottom),
                 child: SingleChildScrollView(
-                  keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
+                  keyboardDismissBehavior:
+                      ScrollViewKeyboardDismissBehavior.onDrag,
                   child: Padding(
                     padding: const EdgeInsets.fromLTRB(16, 16, 16, 24),
                     child: Form(
@@ -528,8 +652,11 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
                           Text(
-                            existing == null ? 'Add Location' : 'Edit Location',
-                            style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
+                            isEdit ? 'Edit Location' : 'Add Location',
+                            style: const TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w600,
+                            ),
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -538,8 +665,9 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                               labelText: 'Location name',
                               border: OutlineInputBorder(),
                             ),
-                            validator: (v) =>
-                                (v == null || v.trim().isEmpty) ? 'Please enter a location name' : null,
+                            validator: (v) => (v == null || v.trim().isEmpty)
+                                ? 'Please enter a location name'
+                                : null,
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -548,8 +676,9 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                               labelText: 'Business name',
                               border: OutlineInputBorder(),
                             ),
-                            validator: (v) =>
-                                (v == null || v.trim().isEmpty) ? 'Please enter a business name' : null,
+                            validator: (v) => (v == null || v.trim().isEmpty)
+                                ? 'Please enter a business name'
+                                : null,
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -562,8 +691,12 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                             maxLength: 10,
                             validator: (v) {
                               final t = (v ?? '').trim();
-                              if (t.isEmpty) return 'Please enter business phone number';
-                              if (t.length != 10) return 'Enter a 10-digit phone number';
+                              if (t.isEmpty) {
+                                return 'Please enter business phone number';
+                              }
+                              if (t.length != 10) {
+                                return 'Enter a 10-digit phone number';
+                              }
                               return null;
                             },
                           ),
@@ -576,9 +709,18 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                               border: OutlineInputBorder(),
                             ),
                             items: const [
-                              DropdownMenuItem(value: 'Regular', child: Text('Regular')),
-                              DropdownMenuItem(value: 'Composition', child: Text('Composition')),
-                              DropdownMenuItem(value: 'Unregistered', child: Text('Unregistered')),
+                              DropdownMenuItem(
+                                value: 'Regular',
+                                child: Text('Regular'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'Composition',
+                                child: Text('Composition'),
+                              ),
+                              DropdownMenuItem(
+                                value: 'Unregistered',
+                                child: Text('Unregistered'),
+                              ),
                             ],
                             onChanged: (value) {
                               if (value == null) return;
@@ -594,7 +736,8 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                           Builder(
                             builder: (context) {
                               final t = selectedGstType.trim().toLowerCase();
-                              final showGst = t == 'regular' || t == 'composition';
+                              final showGst =
+                                  t == 'regular' || t == 'composition';
                               if (!showGst) return const SizedBox.shrink();
                               return Column(
                                 children: [
@@ -607,7 +750,8 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                                     ),
                                     validator: (value) {
                                       if (!showGst) return null;
-                                      if (value == null || value.trim().isEmpty) {
+                                      if (value == null ||
+                                          value.trim().isEmpty) {
                                         return 'Please enter business GST number';
                                       }
                                       return null;
@@ -625,8 +769,38 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                               labelText: 'Location address',
                               border: OutlineInputBorder(),
                             ),
-                            validator: (v) =>
-                                (v == null || v.trim().isEmpty) ? 'Please enter a location address' : null,
+                            validator: (v) => (v == null || v.trim().isEmpty)
+                                ? 'Please enter a location address'
+                                : null,
+                          ),
+                          const SizedBox(height: 12),
+                          _mapPinButton(
+                            pinned: !clearCoordinates &&
+                                latitude != null &&
+                                longitude != null,
+                            onPressed: () async {
+                              final result = await _openLocationMap(
+                                latitude: clearCoordinates ? null : latitude,
+                                longitude: clearCoordinates ? null : longitude,
+                                initialQuery: addressController.text.trim(),
+                              );
+                              if (result == null) return;
+                              setModalState(() {
+                                if (result.cleared) {
+                                  latitude = null;
+                                  longitude = null;
+                                  clearCoordinates = true;
+                                } else {
+                                  latitude = result.latitude;
+                                  longitude = result.longitude;
+                                  clearCoordinates = false;
+                                  final picked = result.address?.trim() ?? '';
+                                  if (picked.isNotEmpty) {
+                                    addressController.text = picked;
+                                  }
+                                }
+                              });
+                            },
                           ),
                           const SizedBox(height: 16),
                           SizedBox(
@@ -634,29 +808,48 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                             child: ElevatedButton(
                               onPressed: () async {
                                 FocusManager.instance.primaryFocus?.unfocus();
-                                if (formKey.currentState?.validate() != true) return;
-                                final gstT = selectedGstType.trim().toLowerCase();
-                                final gstRequired = gstT == 'regular' || gstT == 'composition';
-                                final gstSave = gstRequired ? businessGstController.text.trim() : '';
+                                if (formKey.currentState?.validate() != true) {
+                                  return;
+                                }
+                                final gstT =
+                                    selectedGstType.trim().toLowerCase();
+                                final gstRequired =
+                                    gstT == 'regular' || gstT == 'composition';
+                                final gstSave = gstRequired
+                                    ? businessGstController.text.trim()
+                                    : '';
 
                                 final payload = <String, dynamic>{
                                   'name': nameController.text.trim(),
-                                  'businessName': businessNameController.text.trim(),
-                                  'businessPhoneNumber': businessPhoneController.text.trim(),
+                                  'businessName':
+                                      businessNameController.text.trim(),
+                                  'businessPhoneNumber':
+                                      businessPhoneController.text.trim(),
                                   'businessGstNumber': gstSave,
                                   'gstType': selectedGstType,
                                   'address': addressController.text.trim(),
                                   'updatedAt': FieldValue.serverTimestamp(),
                                 };
+                                if (clearCoordinates) {
+                                  payload['latitude'] = FieldValue.delete();
+                                  payload['longitude'] = FieldValue.delete();
+                                } else {
+                                  payload['latitude'] = latitude;
+                                  payload['longitude'] = longitude;
+                                }
 
                                 try {
-                                  if (existing == null) {
+                                  if (!isEdit) {
                                     payload['subProfileIds'] = <String>[];
                                     payload['isDefault'] = false;
-                                    payload['createdAt'] = FieldValue.serverTimestamp();
-                                    await widget.userRef.collection('locations').add(payload);
+                                    payload['createdAt'] =
+                                        FieldValue.serverTimestamp();
+                                    await widget.userRef
+                                        .collection('locations')
+                                        .add(payload);
                                   } else {
-                                    payload['subProfileIds'] = existing.subProfileIds;
+                                    payload['subProfileIds'] =
+                                        existing!.subProfileIds;
                                     payload['isDefault'] = existing.isDefault;
                                     await widget.userRef
                                         .collection('locations')
@@ -668,7 +861,10 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                                 } catch (e) {
                                   if (ctx.mounted) {
                                     ScaffoldMessenger.of(ctx).showSnackBar(
-                                      SnackBar(content: Text('Save failed: $e'), backgroundColor: Colors.red),
+                                      SnackBar(
+                                        content: Text('Save failed: $e'),
+                                        backgroundColor: Colors.red,
+                                      ),
                                     );
                                   }
                                 }
@@ -676,9 +872,12 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                               style: ElevatedButton.styleFrom(
                                 backgroundColor: AppColors.primaryGreen,
                                 foregroundColor: Colors.white,
-                                padding: const EdgeInsets.symmetric(vertical: 14),
+                                padding:
+                                    const EdgeInsets.symmetric(vertical: 14),
                               ),
-                              child: Text(existing == null ? 'Save Location' : 'Update Location'),
+                              child: Text(
+                                isEdit ? 'Update Location' : 'Save Location',
+                              ),
                             ),
                           ),
                         ],
@@ -798,10 +997,7 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
               ),
             ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () async {
-          if (!await _ensureCanAddLocation()) return;
-          await _showLocationModal();
-        },
+        onPressed: () => _showLocationModal(),
         backgroundColor: AppColors.primaryGreen,
         foregroundColor: AppColors.primaryWhite,
         shape: const CircleBorder(),
@@ -909,6 +1105,13 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                   ),
                 ),
               ],
+            ),
+          ],
+          if (defaultLocation.hasMapPin) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Pinned on map',
+              style: TextStyle(fontSize: 12, color: AppColors.successGreen),
             ),
           ],
         ],
@@ -1034,6 +1237,13 @@ class _UserLocationsScreenState extends State<UserLocationsScreen> {
                   ),
                 ),
               ],
+            ),
+          ],
+          if (location.hasMapPin) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Pinned on map',
+              style: TextStyle(fontSize: 12, color: AppColors.successGreen),
             ),
           ],
           const SizedBox(height: 10),

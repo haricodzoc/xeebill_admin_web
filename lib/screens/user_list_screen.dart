@@ -4,7 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
-import 'package:xeebill_web/screens/settings_screen.dart';
+import 'package:xeebill_web/screens/user_settings_screen.dart';
 import 'package:xeebill_web/utils/app_colors.dart';
 import '../models/user_model.dart';
 import 'bills_screen.dart';
@@ -1239,7 +1239,7 @@ class _UserListScreenState extends State<UserListScreen> {
     Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (context) => SettingsScreen(
+        builder: (context) => UserSettingsScreen(
           userId: user.userId,
           userDocId: user.docId,
           userName: user.name,
@@ -1994,11 +1994,39 @@ class _UserListScreenState extends State<UserListScreen> {
       await appSettingsRef.set({
         'gstType': gstType,
         'labelSize': _kDefaultLabelSize,
+        'receiptSize': '2 inch',
+        'labelPrinterDpi': 203,
+        'labelPrinterName': 'Peri Peri',
+        'labelGap': '2mm',
+        'jewelTagPrintDirection': 'left',
+        'labelTemplateDefault': true,
+        'labelTemplateCustom': false,
         'enableHsn': false,
+        'attributeNamePosition': 'before',
         'showTaxOnBill': gstType == 'Regular',
+        'enableServices': false,
         'flashOnScan': true,
         'voiceBillingEnabled': true,
+        'barcodeScanningEnabled': true,
+        'scanServiceOrders': false,
+        'scanBills': false,
+        'directItemAdditionEnabled': true,
+        'additionalQuantityOptionEnabled': false,
+        'printJobName': false,
+        'enableTableStyleBilling': false,
+        'enableTableStyleServiceItems': false,
+        'enableItemMrp': false,
+        'enableItemDiscount': false,
+        'editPriceWhileBilling': false,
+        'repeatScanning': false,
+        'externalScanner': false,
+        'scannedItemConfirmation': true,
+        'disableBillTypeConfirmation': false,
         'applyRoundOff': false,
+        'roundOffFrequency': 'nearest10',
+        'priceMaskingEnabled': false,
+        'taxRateType': 'Inclusive',
+        'compositionTaxRate': 1.0,
         'rechargeAmount': _kDefaultRechargeAmount,
         'adminMode': true,
         'taxToggle': true,
